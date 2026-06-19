@@ -14,6 +14,14 @@ esphome:
           id: backlight
           brightness: 80%
       - script.execute: show_page
+      - if:
+          condition:
+            lambda: 'return id(ble_connectivity_enabled);'
+          then:
+            - ble.enable:
+            - delay: 500ms
+            - esp32_ble_tracker.start_scan:
+                continuous: true
 
 esp32:
   board: esp32s3box
@@ -37,20 +45,29 @@ api:
         incoming_locations: string[]
       then:
         - lambda: |-
-            id(last_tag_id) = tag_id;
-            id(item_ids) = incoming_item_ids;
-            id(item_labels) = incoming_item_labels;
-            id(item_formats) = incoming_item_formats;
-            id(item_units) = incoming_item_units;
-            id(locations) = incoming_locations;
-            id(selected_item_index) = 0;
-            id(selected_location_index) = 0;
-            id(inventory_qty) = 0;
-            id(current_view) = 10;
-            ESP_LOGI("mise_en_place_assistant", "Create flow loaded: tag=%s items=%d locations=%d", tag_id.c_str(), (int) incoming_item_labels.size(), (int) incoming_locations.size());
-        - script.stop: scan_timeout
-        - script.execute: sync_selection
-        - script.execute: show_page
+            id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id;
+            if (!id(ha_response_accepted)) {
+              ESP_LOGW("mise_en_place_assistant", "Ignoring stale create response: tag=%s view=%d", tag_id.c_str(), id(current_view));
+            } else {
+              id(last_tag_id) = tag_id;
+              id(item_ids) = incoming_item_ids;
+              id(item_labels) = incoming_item_labels;
+              id(item_formats) = incoming_item_formats;
+              id(item_units) = incoming_item_units;
+              id(locations) = incoming_locations;
+              id(selected_item_index) = 0;
+              id(selected_location_index) = 0;
+              id(inventory_qty) = 0;
+              id(current_view) = 10;
+              ESP_LOGI("mise_en_place_assistant", "Create flow loaded: tag=%s items=%d locations=%d", tag_id.c_str(), (int) incoming_item_labels.size(), (int) incoming_locations.size());
+            }
+        - if:
+            condition:
+              lambda: 'return id(ha_response_accepted);'
+            then:
+              - script.stop: scan_timeout
+              - script.execute: sync_selection
+              - script.execute: show_page
 
     - action: show_known_container
       variables:
@@ -64,25 +81,34 @@ api:
         incoming_locations: string[]
       then:
         - lambda: |-
-            id(last_tag_id) = tag_id;
-            id(selected_item_label) = item_label;
-            id(selected_item_format) = item_format;
-            id(selected_item_unit) = unit;
-            id(selected_location_label) = location;
-            id(selected_state) = state;
-            id(locations) = incoming_locations;
-            id(selected_location_index) = 0;
-            for (int i = 0; i < (int) id(locations).size(); i++) {
-              if (id(locations)[i] == location) {
-                id(selected_location_index) = i;
-                break;
+            id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id;
+            if (!id(ha_response_accepted)) {
+              ESP_LOGW("mise_en_place_assistant", "Ignoring stale known-container response: tag=%s view=%d", tag_id.c_str(), id(current_view));
+            } else {
+              id(last_tag_id) = tag_id;
+              id(selected_item_label) = item_label;
+              id(selected_item_format) = item_format;
+              id(selected_item_unit) = unit;
+              id(selected_location_label) = location;
+              id(selected_state) = state;
+              id(locations) = incoming_locations;
+              id(selected_location_index) = 0;
+              for (int i = 0; i < (int) id(locations).size(); i++) {
+                if (id(locations)[i] == location) {
+                  id(selected_location_index) = i;
+                  break;
+                }
               }
+              id(inventory_qty) = quantity;
+              id(current_view) = 20;
+              ESP_LOGI("mise_en_place_assistant", "Known flow loaded: tag=%s item=%s quantity=%d location=%s choices=%d", tag_id.c_str(), item_label.c_str(), quantity, location.c_str(), (int) incoming_locations.size());
             }
-            id(inventory_qty) = quantity;
-            id(current_view) = 20;
-            ESP_LOGI("mise_en_place_assistant", "Known flow loaded: tag=%s item=%s quantity=%d location=%s choices=%d", tag_id.c_str(), item_label.c_str(), quantity, location.c_str(), (int) incoming_locations.size());
-        - script.stop: scan_timeout
-        - script.execute: show_page
+        - if:
+            condition:
+              lambda: 'return id(ha_response_accepted);'
+            then:
+              - script.stop: scan_timeout
+              - script.execute: show_page
 
     - action: show_clean_container
       variables:
@@ -92,21 +118,30 @@ api:
         incoming_locations: string[]
       then:
         - lambda: |-
-            id(last_tag_id) = tag_id;
-            id(selected_item_label) = container_name;
-            id(selected_location_label) = location;
-            id(locations) = incoming_locations;
-            id(selected_location_index) = 0;
-            for (int i = 0; i < (int) id(locations).size(); i++) {
-              if (id(locations)[i] == location) {
-                id(selected_location_index) = i;
-                break;
+            id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id;
+            if (!id(ha_response_accepted)) {
+              ESP_LOGW("mise_en_place_assistant", "Ignoring stale clean-container response: tag=%s view=%d", tag_id.c_str(), id(current_view));
+            } else {
+              id(last_tag_id) = tag_id;
+              id(selected_item_label) = container_name;
+              id(selected_location_label) = location;
+              id(locations) = incoming_locations;
+              id(selected_location_index) = 0;
+              for (int i = 0; i < (int) id(locations).size(); i++) {
+                if (id(locations)[i] == location) {
+                  id(selected_location_index) = i;
+                  break;
+                }
               }
+              id(current_view) = 22;
+              ESP_LOGI("mise_en_place_assistant", "Clean confirmation loaded: tag=%s container=%s", tag_id.c_str(), container_name.c_str());
             }
-            id(current_view) = 22;
-            ESP_LOGI("mise_en_place_assistant", "Clean confirmation loaded: tag=%s container=%s", tag_id.c_str(), container_name.c_str());
-        - script.stop: scan_timeout
-        - script.execute: show_page
+        - if:
+            condition:
+              lambda: 'return id(ha_response_accepted);'
+            then:
+              - script.stop: scan_timeout
+              - script.execute: show_page
 
 ota:
   - platform: esphome
@@ -123,6 +158,82 @@ wifi:
     password: !secret fallback_ap_password
 
 captive_portal:
+
+# ─────────────────────────────
+# BLUETOOTH / HOME ASSISTANT DEVICE MANAGEMENT
+# ─────────────────────────────
+#
+# Home Assistant owns discovery, pairing and the device registry.  The Dial is
+# only the radio proxy, so a supported BLE peripheral can remain its own Home
+# Assistant device instead of becoming an entity of the Dial.
+#
+# Keep the tracker defaults: ESPHome recommends them for Wi-Fi proxies. The
+# Home Assistant BLE connectivity switch disables the complete BLE radio when
+# it is not needed; this reduces radio activity and energy use, but does not
+# reduce the firmware's compile-time BLE footprint.
+esp32_ble:
+  id: ble_radio
+  enable_on_boot: false
+
+esp32_ble_tracker:
+  scan_parameters:
+    # Scanning is started at boot and controlled by the Home Assistant switch.
+    continuous: false
+
+bluetooth_proxy:
+  active: true
+  cache_services: true
+  connection_slots: 3
+
+switch:
+  - platform: template
+    id: ble_connectivity
+    name: "BLE connectivity"
+    entity_category: config
+    lambda: 'return id(ble_connectivity_enabled);'
+    turn_on_action:
+      - lambda: 'id(ble_connectivity_enabled) = true;'
+      - ble.enable:
+      - delay: 500ms
+      - esp32_ble_tracker.start_scan:
+          continuous: true
+      - switch.template.publish:
+          id: ble_connectivity
+          state: ON
+    turn_off_action:
+      - esp32_ble_tracker.stop_scan:
+      - ble.disable:
+      - lambda: 'id(ble_connectivity_enabled) = false;'
+      - switch.template.publish:
+          id: ble_connectivity
+          state: OFF
+
+button:
+  - platform: template
+    name: "Restart BLE connectivity"
+    entity_category: config
+    on_press:
+      - if:
+          condition:
+            lambda: 'return id(ble_connectivity_enabled);'
+          then:
+            - esp32_ble_tracker.stop_scan:
+            - ble.disable:
+            - delay: 250ms
+            - ble.enable:
+            - delay: 500ms
+            - esp32_ble_tracker.start_scan:
+                continuous: true
+
+  - platform: template
+    name: "Return Dial to idle"
+    entity_category: config
+    on_press:
+      - script.execute: cancel_flow
+
+  - platform: restart
+    name: "Restart Dial"
+    entity_category: diagnostic
 
 # ─────────────────────────────
 # HARDWARE
@@ -167,6 +278,8 @@ output:
 light:
   - platform: monochromatic
     id: backlight
+    name: "Screen backlight"
+    entity_category: config
     output: backlight_output
     restore_mode: ALWAYS_ON
 
@@ -179,8 +292,17 @@ rtttl:
 # ─────────────────────────────
 
 binary_sensor:
+  - platform: template
+    name: "BLE radio"
+    device_class: connectivity
+    entity_category: diagnostic
+    lambda: 'return id(ble_radio).is_active();'
+
   - platform: status
     id: ha_connected
+    name: "Home Assistant connection"
+    device_class: connectivity
+    entity_category: diagnostic
 
   - platform: gpio
     id: dial_button
@@ -189,13 +311,15 @@ binary_sensor:
       mode: INPUT_PULLUP
       inverted: true
     filters:
-      - delayed_on: 10ms
-
-    on_press:
-      then:
-        - script.execute: on_short_press
+      - delayed_on_off: 10ms
 
     on_multi_click:
+      - timing:
+          - ON for at most 599ms
+          - OFF for at least 50ms
+        then:
+          - script.execute: on_short_press
+
       - timing:
           - ON for at least 600ms
         then:
@@ -204,6 +328,13 @@ binary_sensor:
 sensor:
   - platform: wifi_signal
     id: wifi_rssi
+    name: "Wi-Fi signal"
+    entity_category: diagnostic
+    update_interval: 60s
+
+  - platform: uptime
+    name: "Uptime"
+    entity_category: diagnostic
     update_interval: 60s
 
   - platform: rotary_encoder
@@ -238,11 +369,37 @@ rc522_i2c:
           id(last_tag_id) = x;
       - script.execute: on_nfc
 
+text_sensor:
+  - platform: template
+    name: "Dial workflow"
+    entity_category: diagnostic
+    update_interval: 1s
+    lambda: |-
+      switch (id(current_view)) {
+        case 0: return {"Idle"};
+        case 1: return {"Waiting for Home Assistant"};
+        case 10: return {"Choosing item"};
+        case 11: return {"Choosing quantity"};
+        case 13: return {"Choosing location"};
+        case 20: return {"Editing inventory"};
+        case 21: return {"Moving container"};
+        case 22: return {"Confirming clean container"};
+        case 23: return {"Choosing clean storage"};
+        case 30: return {"Saved"};
+        case 31: return {"Home Assistant timeout"};
+        default: return {"Unknown"};
+      }
+
 # ─────────────────────────────
 # GLOBAL STATE
 # ─────────────────────────────
 
 globals:
+  - id: ble_connectivity_enabled
+    type: bool
+    restore_value: true
+    initial_value: "true"
+
   - id: current_view
     type: int
     initial_value: "0"
@@ -254,6 +411,10 @@ globals:
   - id: inventory_qty
     type: int
     initial_value: "0"
+
+  - id: ha_response_accepted
+    type: bool
+    initial_value: "false"
 
   - id: last_tag_id
     type: std::string
@@ -316,6 +477,16 @@ globals:
 # ─────────────────────────────
 
 script:
+
+  - id: cancel_flow
+    then:
+      - script.stop: scan_timeout
+      - lambda: |-
+          ESP_LOGI("mise_en_place_assistant", "Cancelling Dial flow: view=%d tag=%s", id(current_view), id(last_tag_id).c_str());
+          id(ha_response_accepted) = false;
+          id(last_tag_id).clear();
+          id(current_view) = 0;
+      - script.execute: show_page
 
   - id: show_page
     then:
@@ -533,16 +704,14 @@ script:
 
   - id: on_long_press
     then:
-      - lambda: |-
-          ESP_LOGI("mise_en_place_assistant", "Long press: returning to idle");
-          id(current_view) = 0;
-      - script.execute: show_page
+      - script.execute: cancel_flow
 
   - id: on_nfc
     then:
       - rtttl.play: "beep:d=4,o=5,b=180:16e6"
       - lambda: |-
           ESP_LOGI("mise_en_place_assistant", "NFC tag scanned: %s", id(last_tag_id).c_str());
+          id(ha_response_accepted) = false;
           id(current_view) = 1;
           id(inventory_qty) = 0;
       - script.execute: show_page
