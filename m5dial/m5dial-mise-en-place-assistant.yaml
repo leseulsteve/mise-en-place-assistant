@@ -74,7 +74,7 @@ api:
         tag_id: string
         item_label: string
         item_format: string
-        quantity: int
+        quantity: float
         unit: string
         location: string
         state: string
@@ -409,8 +409,8 @@ globals:
     initial_value: "0"
 
   - id: inventory_qty
-    type: int
-    initial_value: "0"
+    type: float
+    initial_value: "0.0"
 
   - id: ha_response_accepted
     type: bool
@@ -582,7 +582,7 @@ script:
           } else if ((id(current_view) == 13 || id(current_view) == 21 || id(current_view) == 23) && !id(locations).empty()) {
             id(selected_location_index) = (id(selected_location_index) + 1) % id(locations).size();
           }
-          ESP_LOGD("mise_en_place_assistant", "Encoder up: view=%d item_index=%d location_index=%d qty=%d", id(current_view), id(selected_item_index), id(selected_location_index), id(inventory_qty));
+          ESP_LOGD("mise_en_place_assistant", "Encoder up: view=%d item_index=%d location_index=%d qty=%g", id(current_view), id(selected_item_index), id(selected_location_index), id(inventory_qty));
       - script.execute: sync_selection
       - script.execute: refresh_ui
 
@@ -598,7 +598,7 @@ script:
             int size = id(locations).size();
             id(selected_location_index) = (id(selected_location_index) + size - 1) % size;
           }
-          ESP_LOGD("mise_en_place_assistant", "Encoder down: view=%d item_index=%d location_index=%d qty=%d", id(current_view), id(selected_item_index), id(selected_location_index), id(inventory_qty));
+          ESP_LOGD("mise_en_place_assistant", "Encoder down: view=%d item_index=%d location_index=%d qty=%g", id(current_view), id(selected_item_index), id(selected_location_index), id(inventory_qty));
       - script.execute: sync_selection
       - script.execute: refresh_ui
 
@@ -621,7 +621,7 @@ script:
             lambda: 'return id(press_view) == 11;'
           then:
             - lambda: |-
-                ESP_LOGI("mise_en_place_assistant", "Quantity selected: %d %s", id(inventory_qty), id(selected_item_unit).c_str());
+                ESP_LOGI("mise_en_place_assistant", "Quantity selected: %g %s", id(inventory_qty), id(selected_item_unit).c_str());
                 id(current_view) = 13;
             - script.execute: show_page
 
@@ -630,7 +630,7 @@ script:
             lambda: 'return id(press_view) == 13 && !id(last_tag_id).empty();'
           then:
             - lambda: |-
-                ESP_LOGI("mise_en_place_assistant", "Creating container: tag=%s item=%s qty=%d location=%s", id(last_tag_id).c_str(), id(selected_item_label).c_str(), id(inventory_qty), id(selected_location_label).c_str());
+                ESP_LOGI("mise_en_place_assistant", "Creating container: tag=%s item=%s qty=%g location=%s", id(last_tag_id).c_str(), id(selected_item_label).c_str(), id(inventory_qty), id(selected_location_label).c_str());
             - homeassistant.event:
                 event: esphome.mise_en_place_assistant_create_container
                 data:
@@ -652,7 +652,7 @@ script:
             lambda: 'return id(press_view) == 20 && !id(last_tag_id).empty();'
           then:
             - lambda: |-
-                ESP_LOGI("mise_en_place_assistant", "Known quantity selected: tag=%s qty=%d", id(last_tag_id).c_str(), id(inventory_qty));
+                ESP_LOGI("mise_en_place_assistant", "Known quantity selected: tag=%s qty=%g", id(last_tag_id).c_str(), id(inventory_qty));
                 id(current_view) = 21;
             - script.execute: show_page
 
@@ -661,7 +661,7 @@ script:
             lambda: 'return id(press_view) == 21 && !id(last_tag_id).empty();'
           then:
             - lambda: |-
-                ESP_LOGI("mise_en_place_assistant", "Updating container: tag=%s qty=%d location=%s", id(last_tag_id).c_str(), id(inventory_qty), id(selected_location_label).c_str());
+                ESP_LOGI("mise_en_place_assistant", "Updating container: tag=%s qty=%g location=%s", id(last_tag_id).c_str(), id(inventory_qty), id(selected_location_label).c_str());
             - homeassistant.event:
                 event: esphome.mise_en_place_assistant_update_container
                 data:
@@ -744,7 +744,7 @@ script:
             if (id(selected_location_index) >= (int) id(locations).size()) id(selected_location_index) = id(locations).size() - 1;
             id(selected_location_label) = id(locations)[id(selected_location_index)];
           }
-          ESP_LOGD("mise_en_place_assistant", "Selection synced: item=%s location=%s qty=%d", id(selected_item_label).c_str(), id(selected_location_label).c_str(), id(inventory_qty));
+          ESP_LOGD("mise_en_place_assistant", "Selection synced: item=%s location=%s qty=%g", id(selected_item_label).c_str(), id(selected_location_label).c_str(), id(inventory_qty));
 
   - id: refresh_ui
     then:
@@ -756,10 +756,10 @@ script:
           text: !lambda 'return id(selected_item_format);'
       - lvgl.label.update:
           id: lbl_item_count
-          text: !lambda 'return std::to_string(id(inventory_qty)) + " " + id(selected_item_unit);'
+          text: !lambda 'char value[16]; snprintf(value, sizeof(value), "%g", id(inventory_qty)); return std::string(value) + " " + id(selected_item_unit);'
       - lvgl.label.update:
           id: lbl_qty_value
-          text: !lambda 'return std::to_string(id(inventory_qty));'
+          text: !lambda 'char value[16]; snprintf(value, sizeof(value), "%g", id(inventory_qty)); return std::string(value);'
       - lvgl.label.update:
           id: lbl_qty_unit
           text: !lambda 'return id(selected_item_unit);'
@@ -774,7 +774,7 @@ script:
           text: !lambda 'return id(selected_item_format);'
       - lvgl.label.update:
           id: lbl_known_qty
-          text: !lambda 'return std::to_string(id(inventory_qty)) + " " + id(selected_item_unit);'
+          text: !lambda 'char value[16]; snprintf(value, sizeof(value), "%g", id(inventory_qty)); return std::string(value) + " " + id(selected_item_unit);'
       - lvgl.label.update:
           id: lbl_known_location
           text: !lambda 'return id(selected_location_label);'

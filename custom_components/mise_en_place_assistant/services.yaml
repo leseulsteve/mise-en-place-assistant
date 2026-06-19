@@ -19,6 +19,7 @@ create_container:
       selector:
         number:
           min: 0
+          step: any
           mode: box
     location:
       selector:
@@ -62,10 +63,12 @@ update_container:
       selector:
         number:
           min: 0
+          step: any
           mode: box
     delta:
       selector:
         number:
+          step: any
           mode: box
     location:
       selector:
@@ -104,7 +107,8 @@ fill_container:
       required: true
       selector:
         number:
-          min: 1
+          min: 0.000001
+          step: any
           mode: box
 
 remove_items:
@@ -117,7 +121,8 @@ remove_items:
       required: true
       selector:
         number:
-          min: 1
+          min: 0.000001
+          step: any
           mode: box
 
 scan_container:
@@ -130,6 +135,7 @@ scan_container:
       selector:
         number:
           min: 0
+          step: any
           mode: box
     mode:
       default: set

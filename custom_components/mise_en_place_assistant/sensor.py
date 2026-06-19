@@ -29,8 +29,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     def location_entity(key: str) -> list[MiseEnPlaceAssistantBaseSensor]:
         return [MiseEnPlaceAssistantLocationSensor(manager, key)]
 
-    def item_entity(key: str) -> list[MiseEnPlaceAssistantBaseSensor]:
-        return [MiseEnPlaceAssistantItemTotalSensor(manager, key)]
+    def product_entity(product_id: str) -> list[MiseEnPlaceAssistantBaseSensor]:
+        return [MiseEnPlaceAssistantItemTotalSensor(manager, product_id)]
 
     @callback
     def add_entities(entities: list[MiseEnPlaceAssistantBaseSensor]) -> None:
@@ -41,7 +41,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     add_entities([entity for tag_id in manager.containers for entity in container_entity(tag_id)])
     add_entities([entity for key in manager.locations for entity in location_entity(key)])
-    add_entities([entity for key in manager.items for entity in item_entity(key)])
+    add_entities([entity for product_id in manager.products for entity in product_entity(product_id)])
 
     @callback
     def handle_entity_added(kind: str, key: str) -> None:
@@ -49,8 +49,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             add_entities(container_entity(key))
         elif kind == "location":
             add_entities(location_entity(key))
-        elif kind == "item":
-            add_entities(item_entity(key))
+        elif kind == "product":
+            add_entities(product_entity(key))
 
     entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, handle_entity_added))
 
@@ -102,11 +102,15 @@ class MiseEnPlaceAssistantContainerStatusSensor(MiseEnPlaceAssistantBaseSensor):
         container = self.container
         return {
             "tag_id": self.tag_id,
+            "product_id": container.get("product_id"),
             "item_id": container.get("item_id"),
             "item_label": container.get("item_label"),
             "item_format": container.get("item_format"),
-            "quantity": int(container.get("quantity", 0)),
+            "quantity": container.get("quantity", 0),
             "unit": container.get("unit"),
+            "canonical_quantity": container.get("canonical_quantity", container.get("quantity", 0)),
+            "canonical_unit": container.get("canonical_unit", container.get("unit")),
+            "unit_dimension": container.get("unit_dimension"),
             "location": container.get("location"),
             "updated_at": container.get("updated_at"),
         }
@@ -122,18 +126,18 @@ class MiseEnPlaceAssistantItemTotalSensor(MiseEnPlaceAssistantBaseSensor):
     _attr_icon = "mdi:food-apple"
     _attr_translation_key = "item_total"
 
-    def __init__(self, manager: MiseEnPlaceAssistantInventory, item_key: str) -> None:
-        super().__init__(manager, f"item_{item_key}_total")
-        self.item_key = item_key
-        self._attr_unique_id = f"{DOMAIN}_item_{slugify(item_key)}_total"
+    def __init__(self, manager: MiseEnPlaceAssistantInventory, product_id: str) -> None:
+        super().__init__(manager, f"product_{product_id}_total")
+        self.product_id = product_id
+        self._attr_unique_id = f"{DOMAIN}_product_{slugify(product_id)}_total"
 
     @property
     def item(self) -> dict[str, Any]:
-        return self.manager.item_totals().get(self.item_key, {})
+        return self.manager.item_totals().get(self.product_id, {})
 
     @property
     def name(self) -> str:
-        return f"{self.item.get('label', self.item_key)} total"
+        return f"{self.item.get('label', self.product_id)} total"
 
     @property
     def native_value(self) -> StateType:
@@ -146,6 +150,7 @@ class MiseEnPlaceAssistantItemTotalSensor(MiseEnPlaceAssistantBaseSensor):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         return {
+            "product_id": self.product_id,
             "item_id": self.item.get("item_id"),
             "containers": self.item.get("containers", 0),
             "locations": self.item.get("locations", {}),

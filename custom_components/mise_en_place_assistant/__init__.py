@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 import voluptuous as vol
 
@@ -54,11 +55,33 @@ ATTR_ITEM_LABEL = "item_label"
 SCAN_MODES = ["set", "add", "remove"]
 
 
-def _positive_int(value) -> int:
-    """Validate a positive integer."""
-    value = cv.positive_int(value)
-    if value < 1:
-        raise vol.Invalid("value must be at least 1")
+def _nonnegative_number(value) -> int | float:
+    """Validate a finite, non-negative inventory quantity."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as err:
+        raise vol.Invalid("value must be a number") from err
+    if not math.isfinite(value) or value < 0:
+        raise vol.Invalid("value must be a finite non-negative number")
+    return int(value) if value.is_integer() else value
+
+
+def _finite_number(value) -> int | float:
+    """Validate a finite number that may be a signed adjustment."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError) as err:
+        raise vol.Invalid("value must be a number") from err
+    if not math.isfinite(value):
+        raise vol.Invalid("value must be finite")
+    return int(value) if value.is_integer() else value
+
+
+def _positive_number(value) -> int | float:
+    """Validate a finite quantity greater than zero."""
+    value = _nonnegative_number(value)
+    if value <= 0:
+        raise vol.Invalid("value must be greater than zero")
     return value
 
 
@@ -98,17 +121,20 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             call.data.get(ATTR_QUANTITY, 0),
             call.data.get(ATTR_LOCATION),
         )
-        await manager.async_create_container(
-            tag_id=call.data[ATTR_TAG_ID],
-            name=call.data.get(ATTR_NAME),
-            quantity=call.data.get(ATTR_QUANTITY, 0),
-            location=call.data.get(ATTR_LOCATION),
-            state=call.data.get(ATTR_STATE),
-            unit=call.data.get(ATTR_UNIT) or (item or {}).get("unit", DEFAULT_UNIT),
-            item_id=call.data.get(ATTR_ITEM_ID),
-            item_label=call.data.get(ATTR_ITEM_LABEL) or (item or {}).get("label"),
-            item_format=call.data.get(ATTR_ITEM_FORMAT) or (item or {}).get("format"),
-        )
+        try:
+            await manager.async_create_container(
+                tag_id=call.data[ATTR_TAG_ID],
+                name=call.data.get(ATTR_NAME),
+                quantity=call.data.get(ATTR_QUANTITY, 0),
+                location=call.data.get(ATTR_LOCATION),
+                state=call.data.get(ATTR_STATE),
+                unit=call.data.get(ATTR_UNIT) or (item or {}).get("unit", DEFAULT_UNIT),
+                item_id=call.data.get(ATTR_ITEM_ID),
+                item_label=call.data.get(ATTR_ITEM_LABEL) or (item or {}).get("label"),
+                item_format=call.data.get(ATTR_ITEM_FORMAT) or (item or {}).get("format"),
+            )
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
 
     async def handle_update_container(call: ServiceCall) -> None:
         manager = _manager(hass)
@@ -133,9 +159,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 item_label=call.data.get(ATTR_ITEM_LABEL),
                 item_format=call.data.get(ATTR_ITEM_FORMAT),
             )
-        except KeyError as err:
+        except (KeyError, ValueError) as err:
             raise ServiceValidationError(
                 f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
             ) from err
 
     async def handle_fill_container(call: ServiceCall) -> None:
@@ -217,7 +244,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             {
                 vol.Required(ATTR_TAG_ID): cv.string,
                 vol.Optional(ATTR_NAME): cv.string,
-                vol.Optional(ATTR_QUANTITY, default=0): cv.positive_int,
+                vol.Optional(ATTR_QUANTITY, default=0): _nonnegative_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
                 vol.Optional(ATTR_STATE): cv.string,
                 vol.Optional(ATTR_UNIT, default=DEFAULT_UNIT): cv.string,
@@ -235,8 +262,8 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             {
                 vol.Required(ATTR_TAG_ID): cv.string,
                 vol.Optional(ATTR_NAME): cv.string,
-                vol.Optional(ATTR_QUANTITY): cv.positive_int,
-                vol.Optional(ATTR_DELTA): vol.Coerce(int),
+                vol.Optional(ATTR_QUANTITY): _nonnegative_number,
+                vol.Optional(ATTR_DELTA): _finite_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
                 vol.Optional(ATTR_STATE): cv.string,
                 vol.Optional(ATTR_UNIT): cv.string,
@@ -253,7 +280,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         schema=vol.Schema(
             {
                 vol.Required(ATTR_TAG_ID): cv.string,
-                vol.Required(ATTR_QUANTITY): _positive_int,
+                vol.Required(ATTR_QUANTITY): _positive_number,
             }
         ),
     )
@@ -264,7 +291,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         schema=vol.Schema(
             {
                 vol.Required(ATTR_TAG_ID): cv.string,
-                vol.Required(ATTR_QUANTITY): _positive_int,
+                vol.Required(ATTR_QUANTITY): _positive_number,
             }
         ),
     )
@@ -275,7 +302,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         schema=vol.Schema(
             {
                 vol.Required(ATTR_TAG_ID): cv.string,
-                vol.Optional(ATTR_QUANTITY): cv.positive_int,
+                vol.Optional(ATTR_QUANTITY): _nonnegative_number,
                 vol.Optional(ATTR_MODE, default="set"): vol.In(SCAN_MODES),
             }
         ),
@@ -383,7 +410,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 or container.get("name")
                 or "Container",
                 "item_format": container.get("item_format") or "",
-                "quantity": int(container.get("quantity", 0)),
+                "quantity": float(container.get("quantity", 0)),
                 "unit": container.get("unit") or DEFAULT_UNIT,
                 "location": container.get("location") or "unknown",
                 "state": container.get("state") or "unknown",
@@ -462,7 +489,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         item = _mock_item(event.data.get(ATTR_ITEM_ID))
         quantity = event.data.get(ATTR_QUANTITY, 0)
         try:
-            quantity = int(quantity)
+            quantity = float(quantity)
         except (TypeError, ValueError):
             _LOGGER.debug(
                 "Invalid Mise en Place Assistant create quantity from M5Dial: tag_id=%s quantity=%s",
@@ -471,7 +498,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             quantity = 0
         _LOGGER.info(
-            "Creating Mise en Place Assistant container from M5Dial: tag_id=%s item_id=%s quantity=%d location=%s",
+            "Creating Mise en Place Assistant container from M5Dial: tag_id=%s item_id=%s quantity=%s location=%s",
             tag_id,
             event.data.get(ATTR_ITEM_ID),
             quantity,
@@ -502,7 +529,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
         quantity = event.data.get(ATTR_QUANTITY)
         try:
-            quantity = int(quantity)
+            quantity = float(quantity)
         except (TypeError, ValueError):
             _LOGGER.debug(
                 "Ignoring Mise en Place Assistant update with invalid quantity: tag_id=%s quantity=%s",
@@ -511,7 +538,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             return
         _LOGGER.info(
-            "Updating Mise en Place Assistant container from M5Dial: tag_id=%s quantity=%d location=%s",
+            "Updating Mise en Place Assistant container from M5Dial: tag_id=%s quantity=%s location=%s",
             tag_id,
             quantity,
             event.data.get(ATTR_LOCATION),
@@ -550,7 +577,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         quantity = event.data.get(ATTR_QUANTITY)
         if quantity is not None:
             try:
-                quantity = int(quantity)
+                quantity = float(quantity)
             except (TypeError, ValueError):
                 _LOGGER.debug(
                     "Ignoring Mise en Place Assistant inventory confirm with invalid quantity: tag_id=%s quantity=%s",

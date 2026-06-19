@@ -8,6 +8,9 @@
     "frontend",
     "websocket_api"
   ],
+  "requirements": [
+    "Pint==0.24.4"
+  ],
   "issue_tracker": "https://github.com/leseulsteve/resto-hacs/issues",
   "integration_type": "hub",
   "iot_class": "local_push",

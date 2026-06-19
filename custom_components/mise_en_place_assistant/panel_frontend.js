@@ -261,11 +261,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           <label>NFC tag<input name="tag_id" required placeholder="04:A1:C2" /></label>
           <label>Container name<input name="name" placeholder="Freezer bin 1" /></label>
           <label>Current food<input name="item_label" required placeholder="Chicken breast" /></label>
-          <label>Quantity<input name="quantity" required type="number" min="0" value="1" /></label>
-          <label>Unit<input name="unit" value="items" /></label>
+          <label>Quantity<input name="quantity" required type="number" min="0" step="any" value="1" /></label>
+          <label>Unit<input name="unit" value="items" placeholder="g, kg, ml, items" /></label>
           <label>Location<input name="location" list="locations" placeholder="Freezer" /></label>
           <datalist id="locations">${locationOptions}</datalist>
         </div>
+        <p class="muted">Compatible units reconcile in totals (for example, g and kg). Mass, volume, and package counts stay separate.</p>
         <div class="actions"><button type="button" class="secondary" id="cancel-create">Cancel</button><button type="submit">Save container</button></div>
       </form>
     `;

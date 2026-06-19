@@ -78,4 +78,4 @@ SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED = "mise_en_place_assistant_entity_ad
 
 STORAGE_KEY = DOMAIN
 # New fields are additive and normalized on load; keep existing inventory readable.
-STORAGE_VERSION = 1
+STORAGE_VERSION = 3

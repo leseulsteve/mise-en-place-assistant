@@ -116,7 +116,7 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
     low_containers = [
         _container_summary(container)
         for container in containers
-        if 0 < int(container.get("quantity", 0)) <= 2
+        if 0 < float(container.get("quantity", 0)) <= 2
     ]
     dirty_containers = [
         _container_summary(container)
@@ -151,10 +151,13 @@ def _container_summary(container: dict[str, Any]) -> dict[str, Any]:
     return {
         "tag_id": container.get("tag_id"),
         "name": container.get("name") or "Container",
+        "product_id": container.get("product_id"),
         "item_label": container.get("item_label") or "No current item",
         "format": container.get("item_format") or "",
-        "quantity": int(container.get("quantity", 0)),
+        "quantity": container.get("display_quantity", container.get("quantity", 0)),
         "unit": container.get("unit") or "items",
+        "canonical_quantity": container.get("canonical_quantity", container.get("quantity", 0)),
+        "canonical_unit": container.get("canonical_unit", container.get("unit")) or "items",
         "location": container.get("location") or "Unassigned",
         "state": container.get("state") or "unknown",
         "updated_at": container.get("updated_at") or "",

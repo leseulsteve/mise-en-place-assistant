@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from uuid import UUID, uuid4, uuid5
 
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -12,7 +13,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
-from homeassistant.util import slugify
 
 from .const import (
     CONTAINER_STATE_CLEAN,
@@ -27,8 +27,14 @@ from .const import (
     SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED,
     STORAGE_VERSION,
 )
+from .units import normalize_quantity, quantity_in_display_unit, units_are_compatible
 
 _LOGGER = logging.getLogger(__name__)
+
+# Product IDs belong to this integration, rather than to a catalog provider.
+# UUID5 makes the one-time migration deterministic while UUID4 identifies new
+# locally-created products that have no source identifier.
+_PRODUCT_NAMESPACE = UUID("fe222126-260f-48dc-a4ae-9817f251e867")
 
 
 def _utc_now() -> str:
@@ -46,6 +52,7 @@ class MiseEnPlaceAssistantInventory:
         )
         self.data: dict[str, Any] = {
             "items": {},
+            "products": {},
             "containers": {},
             "locations": {},
             "logbook": [],
@@ -90,10 +97,24 @@ class MiseEnPlaceAssistantInventory:
     def _ensure_schema(self) -> bool:
         """Ensure old Mise en Place Assistant data remains usable by the reusable-container model."""
         changed = False
-        for key, default in (("items", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {})):
+        for key, default in (("items", {}), ("products", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {})):
             if key not in self.data:
                 self.data[key] = default
                 changed = True
+
+        # `items` was the pre-catalog registry, keyed by an external/mock item
+        # ID. Keep it untouched for migration compatibility, but move canonical
+        # product identity into `products`.
+        for key, item in self.items.items():
+            _, product_changed = self._ensure_product(
+                source_id=item.get("id") or key,
+                label=item.get("label"),
+                item_format=item.get("format"),
+                unit=item.get("unit"),
+                source_provider="mock" if self._is_mock_item_id(item.get("id")) else "legacy",
+                legacy_key=key,
+            )
+            changed = product_changed or changed
 
         for tag_id, container in self.containers.items():
             if not container.get("tag_id"):
@@ -105,7 +126,7 @@ class MiseEnPlaceAssistantInventory:
             if not container.get("state") or container.get("state") == "unknown":
                 container["state"] = (
                     CONTAINER_STATE_FILLED
-                    if int(container.get("quantity", 0)) > 0
+                    if float(container.get("canonical_quantity", container.get("quantity", 0))) > 0
                     else CONTAINER_STATE_EMPTY
                 )
                 changed = True
@@ -115,17 +136,32 @@ class MiseEnPlaceAssistantInventory:
             if "updated_at" not in container:
                 container["updated_at"] = container["created_at"]
                 changed = True
+            normalized_quantity = normalize_quantity(
+                container.get("display_quantity", container.get("quantity", 0)),
+                container.get("display_unit", container.get("unit", DEFAULT_UNIT)),
+            )
+            # Earlier records had only literal quantity/unit fields. Retain
+            # those display fields while adding integration-owned canonical data.
+            if any(container.get(key) != value for key, value in normalized_quantity.items()):
+                container.update(normalized_quantity)
+                changed = True
             if container.get("item_id") or container.get("item_label"):
-                changed = self._remember_item(
+                product_id, product_changed = self._ensure_product(
                     container.get("item_id"),
                     container.get("item_label"),
                     container.get("item_format"),
                     container.get("unit"),
-                ) or changed
+                    source_provider="mock" if self._is_mock_item_id(container.get("item_id")) else "legacy",
+                )
+                if container.get("product_id") != product_id:
+                    container["product_id"] = product_id
+                    changed = True
+                changed = product_changed or changed
         for item in MOCK_ITEMS:
-            changed = self._remember_item(
-                item["id"], item["label"], item.get("format"), item.get("unit")
-            ) or changed
+            _, product_changed = self._ensure_product(
+                item["id"], item["label"], item.get("format"), item.get("unit"), source_provider="mock"
+            )
+            changed = product_changed or changed
         return changed
 
     @property
@@ -134,7 +170,13 @@ class MiseEnPlaceAssistantInventory:
 
     @property
     def items(self) -> dict[str, dict[str, Any]]:
+        """Return the legacy item registry retained for storage compatibility."""
         return self.data.setdefault("items", {})
+
+    @property
+    def products(self) -> dict[str, dict[str, Any]]:
+        """Return locally-owned products, keyed by stable product ID."""
+        return self.data.setdefault("products", {})
 
     @property
     def locations(self) -> dict[str, dict[str, Any]]:
@@ -197,7 +239,7 @@ class MiseEnPlaceAssistantInventory:
         *,
         tag_id: str,
         name: str | None = None,
-        quantity: int = 0,
+        quantity: int | float = 0,
         location: str | None = None,
         state: str | None = None,
         unit: str = DEFAULT_UNIT,
@@ -207,22 +249,24 @@ class MiseEnPlaceAssistantInventory:
     ) -> None:
         tag_id = self._normalize_tag_id(tag_id)
         old = self.containers.get(tag_id, {})
-        quantity = max(0, int(quantity))
+        quantity_data = normalize_quantity(quantity, unit)
         location = self.ensure_location(location)
         now = _utc_now()
         is_new = not old
         chosen_state = (
             state
             if state and state != "unknown"
-            else (CONTAINER_STATE_FILLED if quantity else CONTAINER_STATE_EMPTY)
+            else (CONTAINER_STATE_FILLED if quantity_data["canonical_quantity"] else CONTAINER_STATE_EMPTY)
         )
+        product_id = self._resolve_product_id(item_id, item_label, item_format, unit)
         self.containers[tag_id] = {
             "tag_id": tag_id,
             "name": self._normalize_optional(name) or old.get("name") or self.default_container_name(tag_id),
             "item_id": item_id,
             "item_label": item_label,
             "item_format": item_format,
-            "quantity": quantity,
+            "product_id": product_id,
+            **quantity_data,
             "location": location,
             "state": chosen_state,
             "unit": unit or DEFAULT_UNIT,
@@ -231,13 +275,13 @@ class MiseEnPlaceAssistantInventory:
         }
         if is_new:
             async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "container", tag_id)
-        if item_id or item_label:
-            self._remember_item(item_id, item_label, item_format, unit)
-            async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "item", self.item_key(item_id, item_label))
+        if product_id:
+            async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "product", product_id)
         self._add_log_entry(
             "Container created" if is_new else "Container refilled",
             f"{self.containers[tag_id]['name']} is {chosen_state} in {location or 'no location'}.",
-            {"tag_id": tag_id, "quantity": quantity, "location": location, "state": chosen_state},
+            {"tag_id": tag_id, "quantity": quantity_data["quantity"], "unit": quantity_data["unit"], "canonical_quantity": quantity_data["canonical_quantity"], "canonical_unit": quantity_data["canonical_unit"], "location": location, "state": chosen_state,
+             "product": self.product_snapshot(self.containers[tag_id])},
         )
         await self.async_save()
 
@@ -245,8 +289,8 @@ class MiseEnPlaceAssistantInventory:
         self,
         *,
         tag_id: str,
-        quantity: int | None = None,
-        delta: int | None = None,
+        quantity: int | float | None = None,
+        delta: int | float | None = None,
         location: str | None = None,
         state: str | None = None,
         name: str | None = None,
@@ -265,10 +309,33 @@ class MiseEnPlaceAssistantInventory:
         container = self.containers[tag_id]
         before = dict(container)
         quantity_changed = quantity is not None or delta is not None
+        display_unit = unit if unit is not None else container.get("display_unit", container.get("unit", DEFAULT_UNIT))
         if quantity is not None:
-            container["quantity"] = max(0, int(quantity))
+            container.update(normalize_quantity(quantity, display_unit))
         if delta is not None:
-            container["quantity"] = max(0, int(container.get("quantity", 0)) + int(delta))
+            # Deltas use the supplied unit, or the container's displayed unit.
+            # A conversion is only performed inside that unit's own dimension.
+            delta_data = normalize_quantity(abs(delta), display_unit)
+            if not units_are_compatible(container.get("canonical_unit"), delta_data["canonical_unit"]):
+                raise ValueError(
+                    f"Cannot apply {display_unit} to a container measured in "
+                    f"{container.get('canonical_unit', DEFAULT_UNIT)}"
+                )
+            canonical_quantity = max(
+                0,
+                float(container.get("canonical_quantity", container.get("quantity", 0)))
+                + (-1 if delta < 0 else 1) * float(delta_data["canonical_quantity"]),
+            )
+            container.update(quantity_in_display_unit(canonical_quantity, display_unit))
+        if unit is not None and quantity is None and delta is None:
+            if not units_are_compatible(container.get("canonical_unit"), display_unit):
+                raise ValueError(
+                    f"Cannot change a container measured in {container.get('canonical_unit', DEFAULT_UNIT)} "
+                    f"to {display_unit} without setting a new quantity"
+                )
+            container.update(
+                quantity_in_display_unit(container.get("canonical_quantity", container.get("quantity", 0)), display_unit)
+            )
         if location is not None:
             container["location"] = self.ensure_location(location)
         if state is not None:
@@ -278,30 +345,30 @@ class MiseEnPlaceAssistantInventory:
             # needs washing before it can return to clean storage.
             container["state"] = (
                 CONTAINER_STATE_FILLED
-                if container["quantity"]
+                if container["canonical_quantity"]
                 else CONTAINER_STATE_DIRTY
             )
         if name is not None:
             container["name"] = self._normalize_optional(name) or self.default_container_name(tag_id)
-        if unit is not None:
-            container["unit"] = unit or DEFAULT_UNIT
         if item_id is not None:
             container["item_id"] = item_id
         if item_label is not None:
             container["item_label"] = item_label
         if item_format is not None:
             container["item_format"] = item_format
-        container["updated_at"] = _utc_now()
-        if container.get("item_id") or container.get("item_label"):
-            self._remember_item(
+        if item_id is not None or item_label is not None or item_format is not None:
+            container["product_id"] = self._resolve_product_id(
                 container.get("item_id"), container.get("item_label"),
                 container.get("item_format"), container.get("unit"),
             )
-            async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "item", self.item_key(container.get("item_id"), container.get("item_label")))
+        container["updated_at"] = _utc_now()
+        if container.get("product_id"):
+            async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "product", container["product_id"])
         self._add_log_entry(
             "Container updated",
             f"{container['name']} changed from {before.get('state')} to {container.get('state')}.",
-            {"tag_id": tag_id, "old_quantity": before.get("quantity"), "quantity": container.get("quantity"), "old_state": before.get("state"), "state": container.get("state")},
+            {"tag_id": tag_id, "old_quantity": before.get("quantity"), "quantity": container.get("quantity"), "old_state": before.get("state"), "state": container.get("state"),
+             "product": self.product_snapshot(container)},
         )
         await self.async_save()
 
@@ -311,29 +378,30 @@ class MiseEnPlaceAssistantInventory:
         if tag_id not in self.containers:
             raise KeyError(tag_id)
         container = self.containers[tag_id]
-        previous_item = container.get("item_label")
+        previous_product = self.product_snapshot(container)
         if location is not None:
             container["location"] = self.ensure_location(location)
         container.update({
             "item_id": None,
             "item_label": None,
             "item_format": None,
-            "quantity": 0,
+            "product_id": None,
+            **normalize_quantity(0, container.get("display_unit", container.get("unit", DEFAULT_UNIT))),
             "state": CONTAINER_STATE_CLEAN,
             "updated_at": _utc_now(),
         })
         self._add_log_entry(
             "Container washed",
             f"{container['name']} was scanned clean and is ready for storage.",
-            {"tag_id": tag_id, "previous_item": previous_item, "location": container.get("location")},
+            {"tag_id": tag_id, "previous_item": (previous_product or {}).get("label"), "previous_product": previous_product, "location": container.get("location")},
         )
         await self.async_save()
 
-    async def async_scan_container(self, *, tag_id: str, quantity: int | None = None, mode: str = "set") -> None:
-        delta = int(quantity) if quantity is not None and mode == "add" else None
+    async def async_scan_container(self, *, tag_id: str, quantity: int | float | None = None, mode: str = "set") -> None:
+        delta = float(quantity) if quantity is not None and mode == "add" else None
         if quantity is not None and mode == "remove":
-            delta = -int(quantity)
-        set_quantity = int(quantity) if quantity is not None and mode == "set" else None
+            delta = -float(quantity)
+        set_quantity = float(quantity) if quantity is not None and mode == "set" else None
         await self.async_update_container(tag_id=tag_id, quantity=set_quantity, delta=delta, create_missing=True)
 
     async def async_save(self, *, notify: bool = True) -> None:
@@ -343,29 +411,27 @@ class MiseEnPlaceAssistantInventory:
                 listener()
             self.hass.bus.async_fire(EVENT_MISE_EN_PLACE_ASSISTANT_UPDATED, {})
 
-    def item_key(self, item_id: str | None, item_label: str | None) -> str:
-        return item_id or slugify(item_label or "unassigned")
-
     def item_totals(self, *, include_empty: bool = True) -> dict[str, dict[str, Any]]:
-        """Return totals for filled containers, grouped by stable item identity."""
+        """Return totals for filled containers, grouped by stable local product ID."""
         totals: dict[str, dict[str, Any]] = {
             key: {
-                "item_id": item.get("id"), "label": item.get("label") or key,
+                "product_id": key, "item_id": item.get("source", {}).get("id"), "label": item.get("label") or key,
                 "unit": item.get("unit") or DEFAULT_UNIT, "quantity": 0,
                 "quantities": {},
                 "containers": 0, "locations": {},
             }
-            for key, item in self.items.items()
+            for key, item in self.products.items()
         } if include_empty else {}
         for container in self.containers.values():
-            if not container.get("item_id") and not container.get("item_label"):
+            product_id = container.get("product_id")
+            if not product_id:
                 continue
-            if int(container.get("quantity", 0)) <= 0:
+            if float(container.get("canonical_quantity", container.get("quantity", 0))) <= 0:
                 continue
-            key = self.item_key(container.get("item_id"), container.get("item_label"))
-            total = totals.setdefault(key, {"item_id": container.get("item_id"), "label": container.get("item_label") or key, "unit": None, "quantity": None, "quantities": {}, "containers": 0, "locations": {}})
-            unit = container.get("unit") or DEFAULT_UNIT
-            amount = int(container.get("quantity", 0))
+            product = self.products.get(product_id, {})
+            total = totals.setdefault(product_id, {"product_id": product_id, "item_id": product.get("source", {}).get("id"), "label": product.get("label") or container.get("item_label") or product_id, "unit": None, "quantity": None, "quantities": {}, "containers": 0, "locations": {}})
+            unit = container.get("canonical_unit", container.get("unit")) or DEFAULT_UNIT
+            amount = container.get("canonical_quantity", container.get("quantity", 0))
             total["quantities"][unit] = total["quantities"].get(unit, 0) + amount
             total["containers"] += 1
             location = container.get("location") or "Unassigned"
@@ -379,21 +445,77 @@ class MiseEnPlaceAssistantInventory:
                 total["quantity"] = None
         return totals
 
-    def _remember_item(self, item_id: str | None, label: str | None, item_format: str | None, unit: str | None) -> bool:
-        """Store a product definition independently from any reusable container."""
+    def _resolve_product_id(self, item_id: str | None, label: str | None, item_format: str | None, unit: str | None) -> str | None:
+        """Find or create the local product record for supplied catalog data."""
         if not item_id and not label:
-            return False
-        key = self.item_key(item_id, label)
+            return None
+        product_id, _ = self._ensure_product(
+            item_id, label, item_format, unit,
+            source_provider="mock" if self._is_mock_item_id(item_id) else "local",
+        )
+        return product_id
+
+    def _ensure_product(self, source_id: str | None, label: str | None, item_format: str | None,
+                        unit: str | None, *, source_provider: str, legacy_key: str | None = None) -> tuple[str, bool]:
+        """Upsert catalog presentation without changing the product's local identity."""
+        product_id = self._find_product(source_id, source_provider, label)
+        if not product_id:
+            seed = legacy_key or (f"{source_provider}:{source_id}" if source_id else None)
+            product_id = f"product_{uuid5(_PRODUCT_NAMESPACE, seed).hex}" if seed else f"product_{uuid4().hex}"
+        current = self.products.get(product_id, {})
+        source = {"provider": source_provider, "id": source_id} if source_id else current.get("source")
         candidate = {
-            "id": item_id,
-            "label": label or key,
-            "format": item_format,
-            "unit": unit or DEFAULT_UNIT,
+            "id": product_id,
+            "label": label or current.get("label") or source_id or product_id,
+            "format": item_format if item_format is not None else current.get("format"),
+            "unit": unit or current.get("unit") or DEFAULT_UNIT,
+            "source": source,
+            "status": current.get("status", "active"),
+            "created_at": current.get("created_at", _utc_now()),
+            "updated_at": _utc_now(),
         }
-        if self.items.get(key) == candidate:
-            return False
-        self.items[key] = candidate
-        return True
+        # Avoid a save merely because the load-time timestamp would differ.
+        comparable = {key: value for key, value in candidate.items() if key != "updated_at"}
+        previous = {key: value for key, value in current.items() if key != "updated_at"}
+        if comparable == previous:
+            return product_id, False
+        self.products[product_id] = candidate
+        return product_id, True
+
+    def _find_product(self, source_id: str | None, source_provider: str, label: str | None) -> str | None:
+        for product_id, product in self.products.items():
+            source = product.get("source") or {}
+            if source_id and source.get("provider") == source_provider and source.get("id") == source_id:
+                return product_id
+            # Stored inventories from before source adapters existed are
+            # provider-neutral. Preserve that identity when a manual product
+            # is subsequently edited instead of creating a duplicate.
+            if (
+                source_id
+                and source.get("id") == source_id
+                and {source.get("provider"), source_provider} <= {"legacy", "local"}
+            ):
+                return product_id
+        if not source_id and label:
+            for product_id, product in self.products.items():
+                if product.get("label", "").casefold() == label.casefold():
+                    return product_id
+        return None
+
+    def product_for_container(self, container: dict[str, Any]) -> dict[str, Any] | None:
+        product_id = container.get("product_id")
+        return self.products.get(product_id) if product_id else None
+
+    def product_snapshot(self, container: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the immutable product attribution to embed in a log entry."""
+        product = self.product_for_container(container)
+        if not product:
+            return None
+        return {"product_id": product["id"], "label": product["label"], "source": dict(product.get("source") or {})}
+
+    @staticmethod
+    def _is_mock_item_id(item_id: str | None) -> bool:
+        return any(item["id"] == item_id for item in MOCK_ITEMS)
 
     def location_count(self, location_key: str) -> int:
         location = self.locations.get(location_key)
