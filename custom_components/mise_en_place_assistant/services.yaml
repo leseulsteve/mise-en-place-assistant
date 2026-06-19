@@ -1,0 +1,156 @@
+create_location:
+  fields:
+    name:
+      required: true
+      selector:
+        text:
+
+create_container:
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+    name:
+      selector:
+        text:
+    quantity:
+      default: 0
+      selector:
+        number:
+          min: 0
+          mode: box
+    location:
+      selector:
+        text:
+    state:
+      default: unknown
+      selector:
+        select:
+          options:
+            - unknown
+            - filled
+            - empty
+            - dirty
+            - clean
+            - stored
+          custom_value: true
+    unit:
+      default: items
+      selector:
+        text:
+    item_id:
+      selector:
+        text:
+    item_label:
+      selector:
+        text:
+    item_format:
+      selector:
+        text:
+
+update_container:
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+    name:
+      selector:
+        text:
+    quantity:
+      selector:
+        number:
+          min: 0
+          mode: box
+    delta:
+      selector:
+        number:
+          mode: box
+    location:
+      selector:
+        text:
+    state:
+      selector:
+        select:
+          options:
+            - unknown
+            - filled
+            - empty
+            - dirty
+            - clean
+            - stored
+          custom_value: true
+    unit:
+      selector:
+        text:
+    item_id:
+      selector:
+        text:
+    item_label:
+      selector:
+        text:
+    item_format:
+      selector:
+        text:
+
+fill_container:
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+    quantity:
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+
+remove_items:
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+    quantity:
+      required: true
+      selector:
+        number:
+          min: 1
+          mode: box
+
+scan_container:
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+    quantity:
+      selector:
+        number:
+          min: 0
+          mode: box
+    mode:
+      default: set
+      selector:
+        select:
+          options:
+            - set
+            - add
+            - remove
+
+mark_container_clean:
+  name: Mark container clean
+  description: Record that a washed, tagged container is clean and ready for storage.
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+    location:
+      selector:
+        text:
+
+mock_api:
+  fields: {}

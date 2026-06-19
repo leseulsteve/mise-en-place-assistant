@@ -1,0 +1,892 @@
+substitutions:
+  device_name: m5dial-mise-en-place-assistant
+  friendly_name: "M5 Dial Mise en Place Assistant"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+
+  on_boot:
+    priority: -100
+    then:
+      - output.turn_on: power_hold
+      - light.turn_on:
+          id: backlight
+          brightness: 80%
+      - script.execute: show_page
+
+esp32:
+  board: esp32s3box
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  actions:
+    - action: show_create_container
+      variables:
+        tag_id: string
+        incoming_item_ids: string[]
+        incoming_item_labels: string[]
+        incoming_item_formats: string[]
+        incoming_item_units: string[]
+        incoming_locations: string[]
+      then:
+        - lambda: |-
+            id(last_tag_id) = tag_id;
+            id(item_ids) = incoming_item_ids;
+            id(item_labels) = incoming_item_labels;
+            id(item_formats) = incoming_item_formats;
+            id(item_units) = incoming_item_units;
+            id(locations) = incoming_locations;
+            id(selected_item_index) = 0;
+            id(selected_location_index) = 0;
+            id(inventory_qty) = 0;
+            id(current_view) = 10;
+            ESP_LOGI("mise_en_place_assistant", "Create flow loaded: tag=%s items=%d locations=%d", tag_id.c_str(), (int) incoming_item_labels.size(), (int) incoming_locations.size());
+        - script.stop: scan_timeout
+        - script.execute: sync_selection
+        - script.execute: show_page
+
+    - action: show_known_container
+      variables:
+        tag_id: string
+        item_label: string
+        item_format: string
+        quantity: int
+        unit: string
+        location: string
+        state: string
+        incoming_locations: string[]
+      then:
+        - lambda: |-
+            id(last_tag_id) = tag_id;
+            id(selected_item_label) = item_label;
+            id(selected_item_format) = item_format;
+            id(selected_item_unit) = unit;
+            id(selected_location_label) = location;
+            id(selected_state) = state;
+            id(locations) = incoming_locations;
+            id(selected_location_index) = 0;
+            for (int i = 0; i < (int) id(locations).size(); i++) {
+              if (id(locations)[i] == location) {
+                id(selected_location_index) = i;
+                break;
+              }
+            }
+            id(inventory_qty) = quantity;
+            id(current_view) = 20;
+            ESP_LOGI("mise_en_place_assistant", "Known flow loaded: tag=%s item=%s quantity=%d location=%s choices=%d", tag_id.c_str(), item_label.c_str(), quantity, location.c_str(), (int) incoming_locations.size());
+        - script.stop: scan_timeout
+        - script.execute: show_page
+
+    - action: show_clean_container
+      variables:
+        tag_id: string
+        container_name: string
+        location: string
+        incoming_locations: string[]
+      then:
+        - lambda: |-
+            id(last_tag_id) = tag_id;
+            id(selected_item_label) = container_name;
+            id(selected_location_label) = location;
+            id(locations) = incoming_locations;
+            id(selected_location_index) = 0;
+            for (int i = 0; i < (int) id(locations).size(); i++) {
+              if (id(locations)[i] == location) {
+                id(selected_location_index) = i;
+                break;
+              }
+            }
+            id(current_view) = 22;
+            ESP_LOGI("mise_en_place_assistant", "Clean confirmation loaded: tag=%s container=%s", tag_id.c_str(), container_name.c_str());
+        - script.stop: scan_timeout
+        - script.execute: show_page
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: LIGHT
+
+  ap:
+    # ESPHome limits fallback AP SSIDs to 32 characters.
+    ssid: "Mise en Place Dial"
+    password: !secret fallback_ap_password
+
+captive_portal:
+
+# ─────────────────────────────
+# HARDWARE
+# ─────────────────────────────
+
+spi:
+  clk_pin: GPIO6
+  mosi_pin: GPIO5
+
+i2c:
+  - id: bus_internal
+    sda: GPIO11
+    scl: GPIO12
+    scan: true
+    frequency: 100kHz
+
+display:
+  - platform: ili9xxx
+    model: GC9A01A
+    id: round_display
+    cs_pin: GPIO7
+    dc_pin: GPIO4
+    reset_pin: GPIO8
+    invert_colors: true
+    auto_clear_enabled: false
+    update_interval: never
+
+output:
+  - platform: gpio
+    id: power_hold
+    pin: GPIO46
+
+  - platform: ledc
+    id: buzzer_output
+    pin: GPIO3
+    frequency: 2000Hz
+
+  - platform: ledc
+    id: backlight_output
+    pin: GPIO9
+
+light:
+  - platform: monochromatic
+    id: backlight
+    output: backlight_output
+    restore_mode: ALWAYS_ON
+
+rtttl:
+  output: buzzer_output
+  id: buzzer
+
+# ─────────────────────────────
+# SENSORS
+# ─────────────────────────────
+
+binary_sensor:
+  - platform: status
+    id: ha_connected
+
+  - platform: gpio
+    id: dial_button
+    pin:
+      number: GPIO42
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on: 10ms
+
+    on_press:
+      then:
+        - script.execute: on_short_press
+
+    on_multi_click:
+      - timing:
+          - ON for at least 600ms
+        then:
+          - script.execute: on_long_press
+
+sensor:
+  - platform: wifi_signal
+    id: wifi_rssi
+    update_interval: 60s
+
+  - platform: rotary_encoder
+    id: dial_encoder
+    pin_a:
+      number: GPIO40
+      mode: INPUT_PULLUP
+    pin_b:
+      number: GPIO41
+      mode: INPUT_PULLUP
+    resolution: 2
+    filters:
+      - debounce: 2ms
+
+    on_clockwise:
+      then:
+        - script.execute: encoder_up
+
+    on_anticlockwise:
+      then:
+        - script.execute: encoder_down
+
+rc522_i2c:
+  id: nfc_reader
+  i2c_id: bus_internal
+  address: 0x28
+  update_interval: 1s
+
+  on_tag:
+    then:
+      - lambda: |-
+          id(last_tag_id) = x;
+      - script.execute: on_nfc
+
+# ─────────────────────────────
+# GLOBAL STATE
+# ─────────────────────────────
+
+globals:
+  - id: current_view
+    type: int
+    initial_value: "0"
+
+  - id: press_view
+    type: int
+    initial_value: "0"
+
+  - id: inventory_qty
+    type: int
+    initial_value: "0"
+
+  - id: last_tag_id
+    type: std::string
+    initial_value: '""'
+
+  - id: item_ids
+    type: std::vector<std::string>
+    initial_value: "std::vector<std::string>()"
+
+  - id: item_labels
+    type: std::vector<std::string>
+    initial_value: "std::vector<std::string>()"
+
+  - id: item_formats
+    type: std::vector<std::string>
+    initial_value: "std::vector<std::string>()"
+
+  - id: item_units
+    type: std::vector<std::string>
+    initial_value: "std::vector<std::string>()"
+
+  - id: locations
+    type: std::vector<std::string>
+    initial_value: "std::vector<std::string>()"
+
+  - id: selected_item_index
+    type: int
+    initial_value: "0"
+
+  - id: selected_location_index
+    type: int
+    initial_value: "0"
+
+  - id: selected_item_id
+    type: std::string
+    initial_value: '""'
+
+  - id: selected_item_label
+    type: std::string
+    initial_value: '""'
+
+  - id: selected_item_format
+    type: std::string
+    initial_value: '""'
+
+  - id: selected_item_unit
+    type: std::string
+    initial_value: '"items"'
+
+  - id: selected_location_label
+    type: std::string
+    initial_value: '""'
+
+  - id: selected_state
+    type: std::string
+    initial_value: '"unknown"'
+
+# ─────────────────────────────
+# SCRIPTS (NO INVALID IF SHORTCUTS)
+# ─────────────────────────────
+
+script:
+
+  - id: show_page
+    then:
+      - lambda: |-
+          ESP_LOGD("mise_en_place_assistant", "Showing view %d", id(current_view));
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 0;'
+          then:
+            - lvgl.page.show: page_idle
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 1;'
+          then:
+            - lvgl.page.show: page_loading
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 10;'
+          then:
+            - lvgl.page.show: page_create_item
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 11;'
+          then:
+            - lvgl.page.show: page_create_qty
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 13;'
+          then:
+            - lvgl.page.show: page_create_location
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 20;'
+          then:
+            - lvgl.page.show: page_known
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 21;'
+          then:
+            - lvgl.page.show: page_known_location
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 22;'
+          then:
+            - lvgl.page.show: page_clean
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 23;'
+          then:
+            - lvgl.page.show: page_clean_location
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 30;'
+          then:
+            - lvgl.page.show: page_done
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 31;'
+          then:
+            - lvgl.page.show: page_error
+      - script.execute: refresh_ui
+
+  - id: scan_timeout
+    mode: restart
+    then:
+      - delay: 12s
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 1;'
+          then:
+            - lambda: |-
+                ESP_LOGW("mise_en_place_assistant", "Scan timed out waiting for Home Assistant response: tag=%s", id(last_tag_id).c_str());
+                id(current_view) = 31;
+            - script.execute: show_page
+
+  - id: encoder_up
+    then:
+      - lambda: |-
+          if (id(current_view) == 10 && !id(item_labels).empty()) {
+            id(selected_item_index) = (id(selected_item_index) + 1) % id(item_labels).size();
+          } else if (id(current_view) == 11 || id(current_view) == 20) {
+            id(inventory_qty)++;
+          } else if ((id(current_view) == 13 || id(current_view) == 21 || id(current_view) == 23) && !id(locations).empty()) {
+            id(selected_location_index) = (id(selected_location_index) + 1) % id(locations).size();
+          }
+          ESP_LOGD("mise_en_place_assistant", "Encoder up: view=%d item_index=%d location_index=%d qty=%d", id(current_view), id(selected_item_index), id(selected_location_index), id(inventory_qty));
+      - script.execute: sync_selection
+      - script.execute: refresh_ui
+
+  - id: encoder_down
+    then:
+      - lambda: |-
+          if (id(current_view) == 10 && !id(item_labels).empty()) {
+            int size = id(item_labels).size();
+            id(selected_item_index) = (id(selected_item_index) + size - 1) % size;
+          } else if ((id(current_view) == 11 || id(current_view) == 20) && id(inventory_qty) > 0) {
+            id(inventory_qty)--;
+          } else if ((id(current_view) == 13 || id(current_view) == 21 || id(current_view) == 23) && !id(locations).empty()) {
+            int size = id(locations).size();
+            id(selected_location_index) = (id(selected_location_index) + size - 1) % size;
+          }
+          ESP_LOGD("mise_en_place_assistant", "Encoder down: view=%d item_index=%d location_index=%d qty=%d", id(current_view), id(selected_item_index), id(selected_location_index), id(inventory_qty));
+      - script.execute: sync_selection
+      - script.execute: refresh_ui
+
+  - id: on_short_press
+    then:
+      - lambda: 'id(press_view) = id(current_view);'
+      - lambda: |-
+          ESP_LOGD("mise_en_place_assistant", "Button short press: view=%d tag=%s", id(press_view), id(last_tag_id).c_str());
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 10;'
+          then:
+            - lambda: |-
+                ESP_LOGI("mise_en_place_assistant", "Item selected: id=%s label=%s format=%s unit=%s", id(selected_item_id).c_str(), id(selected_item_label).c_str(), id(selected_item_format).c_str(), id(selected_item_unit).c_str());
+                id(current_view) = 11;
+            - script.execute: show_page
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 11;'
+          then:
+            - lambda: |-
+                ESP_LOGI("mise_en_place_assistant", "Quantity selected: %d %s", id(inventory_qty), id(selected_item_unit).c_str());
+                id(current_view) = 13;
+            - script.execute: show_page
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 13 && !id(last_tag_id).empty();'
+          then:
+            - lambda: |-
+                ESP_LOGI("mise_en_place_assistant", "Creating container: tag=%s item=%s qty=%d location=%s", id(last_tag_id).c_str(), id(selected_item_label).c_str(), id(inventory_qty), id(selected_location_label).c_str());
+            - homeassistant.event:
+                event: esphome.mise_en_place_assistant_create_container
+                data:
+                  tag_id: !lambda 'return id(last_tag_id);'
+                  item_id: !lambda 'return id(selected_item_id);'
+                  item_label: !lambda 'return id(selected_item_label);'
+                  item_format: !lambda 'return id(selected_item_format);'
+                  unit: !lambda 'return id(selected_item_unit);'
+                  quantity: !lambda 'return std::to_string(id(inventory_qty));'
+                  location: !lambda 'return id(selected_location_label);'
+                  state: "unknown"
+                  source: "${device_name}"
+            - lambda: |-
+                id(current_view) = 30;
+            - script.execute: show_page
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 20 && !id(last_tag_id).empty();'
+          then:
+            - lambda: |-
+                ESP_LOGI("mise_en_place_assistant", "Known quantity selected: tag=%s qty=%d", id(last_tag_id).c_str(), id(inventory_qty));
+                id(current_view) = 21;
+            - script.execute: show_page
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 21 && !id(last_tag_id).empty();'
+          then:
+            - lambda: |-
+                ESP_LOGI("mise_en_place_assistant", "Updating container: tag=%s qty=%d location=%s", id(last_tag_id).c_str(), id(inventory_qty), id(selected_location_label).c_str());
+            - homeassistant.event:
+                event: esphome.mise_en_place_assistant_update_container
+                data:
+                  tag_id: !lambda 'return id(last_tag_id);'
+                  quantity: !lambda 'return std::to_string(id(inventory_qty));'
+                  location: !lambda 'return id(selected_location_label);'
+                  source: "${device_name}"
+            - lambda: |-
+                id(current_view) = 30;
+            - script.execute: show_page
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 22 && !id(last_tag_id).empty();'
+          then:
+            - lambda: 'id(current_view) = 23;'
+            - script.execute: show_page
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 23 && !id(last_tag_id).empty();'
+          then:
+            - lambda: |-
+                ESP_LOGI("mise_en_place_assistant", "Container marked clean: tag=%s", id(last_tag_id).c_str());
+            - homeassistant.event:
+                event: esphome.mise_en_place_assistant_mark_clean
+                data:
+                  tag_id: !lambda 'return id(last_tag_id);'
+                  location: !lambda 'return id(selected_location_label);'
+                  source: "${device_name}"
+            - lambda: 'id(current_view) = 30;'
+            - script.execute: show_page
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 30 || id(press_view) == 31;'
+          then:
+            - lambda: 'id(current_view) = 0;'
+            - script.execute: show_page
+
+  - id: on_long_press
+    then:
+      - lambda: |-
+          ESP_LOGI("mise_en_place_assistant", "Long press: returning to idle");
+          id(current_view) = 0;
+      - script.execute: show_page
+
+  - id: on_nfc
+    then:
+      - rtttl.play: "beep:d=4,o=5,b=180:16e6"
+      - lambda: |-
+          ESP_LOGI("mise_en_place_assistant", "NFC tag scanned: %s", id(last_tag_id).c_str());
+          id(current_view) = 1;
+          id(inventory_qty) = 0;
+      - script.execute: show_page
+      - homeassistant.event:
+          event: esphome.mise_en_place_assistant_scan
+          data:
+            tag_id: !lambda 'return id(last_tag_id);'
+            source: "${device_name}"
+      - script.execute: scan_timeout
+
+  - id: sync_selection
+    then:
+      - lambda: |-
+          if (!id(item_labels).empty()) {
+            if (id(selected_item_index) < 0) id(selected_item_index) = 0;
+            if (id(selected_item_index) >= (int) id(item_labels).size()) id(selected_item_index) = id(item_labels).size() - 1;
+            id(selected_item_label) = id(item_labels)[id(selected_item_index)];
+          }
+          if (!id(item_ids).empty() && id(selected_item_index) < (int) id(item_ids).size()) {
+            id(selected_item_id) = id(item_ids)[id(selected_item_index)];
+          }
+          if (!id(item_formats).empty() && id(selected_item_index) < (int) id(item_formats).size()) {
+            id(selected_item_format) = id(item_formats)[id(selected_item_index)];
+          }
+          if (!id(item_units).empty() && id(selected_item_index) < (int) id(item_units).size()) {
+            id(selected_item_unit) = id(item_units)[id(selected_item_index)];
+          }
+          if (!id(locations).empty()) {
+            if (id(selected_location_index) < 0) id(selected_location_index) = 0;
+            if (id(selected_location_index) >= (int) id(locations).size()) id(selected_location_index) = id(locations).size() - 1;
+            id(selected_location_label) = id(locations)[id(selected_location_index)];
+          }
+          ESP_LOGD("mise_en_place_assistant", "Selection synced: item=%s location=%s qty=%d", id(selected_item_label).c_str(), id(selected_location_label).c_str(), id(inventory_qty));
+
+  - id: refresh_ui
+    then:
+      - lvgl.label.update:
+          id: lbl_item_name
+          text: !lambda 'return id(selected_item_label);'
+      - lvgl.label.update:
+          id: lbl_item_format
+          text: !lambda 'return id(selected_item_format);'
+      - lvgl.label.update:
+          id: lbl_item_count
+          text: !lambda 'return std::to_string(id(inventory_qty)) + " " + id(selected_item_unit);'
+      - lvgl.label.update:
+          id: lbl_qty_value
+          text: !lambda 'return std::to_string(id(inventory_qty));'
+      - lvgl.label.update:
+          id: lbl_qty_unit
+          text: !lambda 'return id(selected_item_unit);'
+      - lvgl.label.update:
+          id: lbl_location_name
+          text: !lambda 'return id(selected_location_label);'
+      - lvgl.label.update:
+          id: lbl_known_name
+          text: !lambda 'return id(selected_item_label);'
+      - lvgl.label.update:
+          id: lbl_known_format
+          text: !lambda 'return id(selected_item_format);'
+      - lvgl.label.update:
+          id: lbl_known_qty
+          text: !lambda 'return std::to_string(id(inventory_qty)) + " " + id(selected_item_unit);'
+      - lvgl.label.update:
+          id: lbl_known_location
+          text: !lambda 'return id(selected_location_label);'
+      - lvgl.label.update:
+          id: lbl_known_location_select
+          text: !lambda 'return id(selected_location_label);'
+      - lvgl.label.update:
+          id: lbl_clean_name
+          text: !lambda 'return id(selected_item_label);'
+      - lvgl.label.update:
+          id: lbl_clean_location
+          text: !lambda 'return id(selected_location_label);'
+
+# ─────────────────────────────
+# LVGL (LEFT EMPTY ON PURPOSE FOR STABILITY)
+# ─────────────────────────────
+lvgl:
+  displays:
+    - round_display
+  bg_color: 0x0B0B0F
+
+  pages:
+
+    - id: page_idle
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: CENTER
+            y: -28
+            text: "Mise en Place Assistant"
+            text_color: 0xFFFFFF
+        - label:
+            align: CENTER
+            y: 8
+            text: "Scan a tag"
+            text_color: 0x8E8E93
+        - label:
+            align: CENTER
+            y: 42
+            text: "Hold to cancel"
+            text_color: 0x3A3A3C
+
+    - id: page_loading
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: CENTER
+            y: -14
+            text: "Reading tag"
+            text_color: 0xFFFFFF
+        - label:
+            align: CENTER
+            y: 22
+            text: "One moment..."
+            text_color: 0x8E8E93
+
+    - id: page_create_item
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "New container"
+            text_color: 0x8E8E93
+        - label:
+            id: lbl_item_name
+            align: CENTER
+            y: -28
+            text: ""
+            text_color: 0xFFFFFF
+        - label:
+            id: lbl_item_count
+            align: CENTER
+            y: 8
+            text: "0 items"
+            text_color: 0x34C759
+        - label:
+            id: lbl_item_format
+            align: CENTER
+            y: 40
+            text: ""
+            text_color: 0x8E8E93
+        - label:
+            align: BOTTOM_MID
+            y: -24
+            text: "Turn item  Press next"
+            text_color: 0x3A3A3C
+
+    - id: page_create_qty
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Inventory count"
+            text_color: 0x8E8E93
+        - label:
+            id: lbl_qty_value
+            align: CENTER
+            y: -18
+            text: "0"
+            text_color: 0xFFFFFF
+        - label:
+            id: lbl_qty_unit
+            align: CENTER
+            y: 34
+            text: "items"
+            text_color: 0x34C759
+        - label:
+            align: BOTTOM_MID
+            y: -24
+            text: "Turn count  Press next"
+            text_color: 0x3A3A3C
+
+    - id: page_create_location
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Location"
+            text_color: 0x8E8E93
+        - label:
+            id: lbl_location_name
+            align: CENTER
+            y: -12
+            text: ""
+            text_color: 0xFFFFFF
+        - label:
+            align: CENTER
+            y: 32
+            text: "Press to create"
+            text_color: 0x34C759
+        - label:
+            align: BOTTOM_MID
+            y: -24
+            text: "Turn location"
+            text_color: 0x3A3A3C
+
+    - id: page_known
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 20
+            text: "Current inventory"
+            text_color: 0x8E8E93
+        - label:
+            id: lbl_known_name
+            align: CENTER
+            y: -44
+            text: ""
+            text_color: 0xFFFFFF
+        - label:
+            id: lbl_known_format
+            align: CENTER
+            y: -12
+            text: ""
+            text_color: 0x8E8E93
+        - label:
+            id: lbl_known_qty
+            align: CENTER
+            y: 26
+            text: "0 items"
+            text_color: 0x34C759
+        - label:
+            id: lbl_known_location
+            align: CENTER
+            y: 58
+            text: ""
+            text_color: 0x8E8E93
+        - label:
+            align: BOTTOM_MID
+            y: -18
+            text: "Turn count  Press next"
+            text_color: 0x3A3A3C
+
+    - id: page_known_location
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Move container"
+            text_color: 0x8E8E93
+        - label:
+            id: lbl_known_location_select
+            align: CENTER
+            y: -12
+            text: ""
+            text_color: 0xFFFFFF
+        - label:
+            align: CENTER
+            y: 32
+            text: "Press to save"
+            text_color: 0x34C759
+        - label:
+            align: BOTTOM_MID
+            y: -24
+            text: "Turn location"
+            text_color: 0x3A3A3C
+
+    - id: page_clean
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Washed container"
+            text_color: 0x8E8E93
+        - label:
+            id: lbl_clean_name
+            align: CENTER
+            y: -14
+            text: ""
+            text_color: 0xFFFFFF
+        - label:
+            align: CENTER
+            y: 30
+            text: "Press to choose storage"
+            text_color: 0x34C759
+        - label:
+            align: BOTTOM_MID
+            y: -24
+            text: "Hold to cancel"
+            text_color: 0x3A3A3C
+
+    - id: page_clean_location
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: TOP_MID
+            y: 22
+            text: "Store container"
+            text_color: 0x8E8E93
+        - label:
+            id: lbl_clean_location
+            align: CENTER
+            y: -12
+            text: ""
+            text_color: 0xFFFFFF
+        - label:
+            align: CENTER
+            y: 32
+            text: "Press to save"
+            text_color: 0x34C759
+        - label:
+            align: BOTTOM_MID
+            y: -24
+            text: "Turn location"
+            text_color: 0x3A3A3C
+
+    - id: page_done
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: CENTER
+            y: -10
+            text: "Saved"
+            text_color: 0x34C759
+        - label:
+            align: CENTER
+            y: 28
+            text: "Press to scan"
+            text_color: 0x8E8E93
+
+    - id: page_error
+      bg_color: 0x0B0B0F
+      widgets:
+        - label:
+            align: CENTER
+            y: -30
+            text: "HA timeout"
+            text_color: 0xFF3B30
+        - label:
+            align: CENTER
+            y: 6
+            text: "Check Mise en Place Assistant logs"
+            text_color: 0xFFFFFF
+        - label:
+            align: CENTER
+            y: 42
+            text: "Press to scan"
+            text_color: 0x8E8E93

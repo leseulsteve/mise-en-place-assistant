@@ -1,0 +1,46 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Mise en Place Assistant",
+        "description": "Set up inventory, meal planning, grocery lists, food prep, and pantry management.",
+        "data": {
+          "initial_locations": "Initial locations",
+          "m5dial_service_prefix": "M5Dial ESPHome action prefix",
+          "m5dial_device_id": "Enrolled M5Dial",
+          "m5dial_event_source": "M5Dial event source"
+        }
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Mise en Place Assistant is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mise en Place Assistant options",
+        "description": "Locations listed here will be created if they do not already exist.",
+        "data": {
+          "initial_locations": "Locations",
+          "m5dial_service_prefix": "M5Dial ESPHome action prefix",
+          "m5dial_device_id": "Enrolled M5Dial",
+          "m5dial_event_source": "M5Dial event source"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "container": {
+        "name": "Status"
+      },
+      "item_total": {
+        "name": "Total"
+      },
+      "location": {
+        "name": "Containers"
+      }
+    }
+  }
+}
