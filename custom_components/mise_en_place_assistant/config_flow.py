@@ -177,7 +177,6 @@ def _provider_selector():
         selector.SelectSelectorConfig(
             options=CATALOG_PROVIDERS,
             multiple=True,
-            mode=selector.SelectSelectorMode.LIST,
         )
     )
 
@@ -187,9 +186,20 @@ def _shopping_provider_selector():
     return selector.SelectSelector(
         selector.SelectSelectorConfig(
             options=SHOPPING_LIST_PROVIDERS,
-            mode=selector.SelectSelectorMode.DROPDOWN,
         )
     )
+
+
+def _optional_device_field(default: str | None = None):
+    """Return a device selector field without serializing a None default."""
+    kwargs = {"default": default} if default else {}
+    return vol.Optional(CONF_M5DIAL_DEVICE_ID, **kwargs)
+
+
+def _optional_kitchenowl_list_field(default: int | None = None):
+    """Return the KitchenOwl list field without serializing a None default."""
+    kwargs = {"default": default} if default is not None else {}
+    return vol.Optional(CONF_KITCHENOWL_SHOPPING_LIST_ID, **kwargs)
 
 
 def _needs_mealie(providers: list[str]) -> bool:
@@ -273,7 +283,7 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_M5DIAL_SERVICE_PREFIX,
                     default=(user_input or {}).get(CONF_M5DIAL_SERVICE_PREFIX, DEFAULT_M5DIAL_SERVICE_PREFIX),
                 ): str,
-                vol.Optional(CONF_M5DIAL_DEVICE_ID, default=(user_input or {}).get(CONF_M5DIAL_DEVICE_ID)): selector.DeviceSelector(
+                _optional_device_field((user_input or {}).get(CONF_M5DIAL_DEVICE_ID)): selector.DeviceSelector(
                     selector.DeviceSelectorConfig(integration="esphome")
                 ),
                 vol.Optional(
@@ -297,9 +307,8 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_KITCHENOWL_TOKEN,
                     default=(user_input or {}).get(CONF_KITCHENOWL_TOKEN, ""),
                 ): str,
-                vol.Optional(
-                    CONF_KITCHENOWL_SHOPPING_LIST_ID,
-                    default=(user_input or {}).get(CONF_KITCHENOWL_SHOPPING_LIST_ID),
+                _optional_kitchenowl_list_field(
+                    (user_input or {}).get(CONF_KITCHENOWL_SHOPPING_LIST_ID)
                 ): _optional_positive_int,
             }
         )
@@ -516,10 +525,7 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
                         CONF_M5DIAL_SERVICE_PREFIX,
                         default=current_prefix,
                     ): str,
-                    vol.Optional(
-                        CONF_M5DIAL_DEVICE_ID,
-                        default=current_m5dial,
-                    ): selector.DeviceSelector(
+                    _optional_device_field(current_m5dial): selector.DeviceSelector(
                         selector.DeviceSelectorConfig(integration="esphome")
                     ),
                     vol.Optional(
@@ -535,10 +541,7 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(CONF_SHOPPING_LIST_PROVIDER, default=current_shopping_provider): _shopping_provider_selector(),
                     vol.Optional(CONF_KITCHENOWL_URL, default=current_kitchenowl_url): _optional_kitchenowl_url,
                     vol.Optional(CONF_KITCHENOWL_TOKEN, default=current_kitchenowl_token): str,
-                    vol.Optional(
-                        CONF_KITCHENOWL_SHOPPING_LIST_ID,
-                        default=current_kitchenowl_list_id,
-                    ): _optional_positive_int,
+                    _optional_kitchenowl_list_field(current_kitchenowl_list_id): _optional_positive_int,
                 }
             ),
             errors=errors,
