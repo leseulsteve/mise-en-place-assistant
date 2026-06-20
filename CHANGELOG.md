@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.8 - 2026-06-20
+
+- Add Grocy-backed catalog, stock, shopping, and storage-location workflows with HA-owned product review metadata, KitchenOwl shopping-list fallback, richer DEV fixtures, and stable M5Dial location IDs, because treating display names as durable inventory infrastructure was asking a label printer to be a database.
+
 ## 0.0.7 - 2026-06-20
 
 - Add Mealie recipe inventory, Pint-backed units, and M5Dial BLE presence controls, because stale state should not get pantry privileges.
