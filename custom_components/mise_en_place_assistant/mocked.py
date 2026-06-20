@@ -49,9 +49,9 @@ MOCKED_STOCK = [
 ]
 
 MOCKED_STORAGE_LOCATIONS = [
-    {"id": "mocked:fridge", "name": "Fridge", "provider": "mocked", "active": True},
-    {"id": "mocked:freezer", "name": "Freezer", "provider": "mocked", "active": True},
-    {"id": "mocked:pantry", "name": "Pantry", "provider": "mocked", "active": True},
+    {"id": "mocked:fridge", "name": "Fridge", "provider": "mocked", "active": True, "sublocations": ["Top shelf", "Bottom drawer", "Door bin"]},
+    {"id": "mocked:freezer", "name": "Freezer", "provider": "mocked", "active": True, "sublocations": ["Top shelf", "Door bin"]},
+    {"id": "mocked:pantry", "name": "Pantry", "provider": "mocked", "active": True, "sublocations": ["Dry goods", "Coffee shelf"]},
 ]
 
 # Keep the offline provider useful for the prepared-meal workflow too.

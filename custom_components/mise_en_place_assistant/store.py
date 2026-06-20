@@ -598,6 +598,8 @@ class MiseEnPlaceAssistantInventory:
                     source_provider=str(food.get("provider") or self.catalog_provider()),
                 )
                 changed = changed or product_changed
+        if self.mock_catalog_enabled():
+            changed = self._ensure_mock_demo_sublocations() or changed
         if changed:
             await self.async_save(notify=False)
         return items
@@ -1437,19 +1439,19 @@ class MiseEnPlaceAssistantInventory:
         foods = {item["id"]: item for item in self.catalog_items()}
         recipes = {item["id"]: item for item in self.recipe_items()}
         examples = (
-            ("demo:spinach", "Produce bin", "mocked:baby-spinach", 180, "Fridge", "ingredient"),
-            ("demo:eggs-low", "Egg carton", "mocked:eggs", 2, "Fridge", "ingredient"),
-            ("demo:milk-empty", "Milk carton", "mocked:whole-milk", 0, "Fridge", "ingredient"),
-            ("demo:rice", "Rice jar", "mocked:basmati-rice", 1200, "Pantry", "ingredient"),
-            ("demo:coffee", "Coffee canister", "mocked:coffee", 350, "Pantry", "ingredient"),
-            ("demo:peas", "Freezer peas", "mocked:frozen-peas", 600, "Freezer", "ingredient"),
-            ("demo:curry", "Curry portions", "mocked:recipe:chicken-curry", 3, "Fridge", "meal"),
-            ("demo:vegetables", "Roast vegetables", "mocked:recipe:roast-vegetables", 4, "Fridge", "meal"),
-            ("demo:meal-rice", "Cooked rice", "mocked:recipe:rice", 1, "Fridge", "meal"),
-            ("demo:lentil-loaf", "Lentil loaf", "mocked:recipe:lentil-loaf", 0, "Freezer", "recipe"),
+            ("demo:spinach", "Produce bin", "mocked:baby-spinach", 180, "Fridge", "Bottom drawer", "ingredient"),
+            ("demo:eggs-low", "Egg carton", "mocked:eggs", 2, "Fridge", "Door bin", "ingredient"),
+            ("demo:milk-empty", "Milk carton", "mocked:whole-milk", 0, "Fridge", "Door bin", "ingredient"),
+            ("demo:rice", "Rice jar", "mocked:basmati-rice", 1200, "Pantry", "Dry goods", "ingredient"),
+            ("demo:coffee", "Coffee canister", "mocked:coffee", 350, "Pantry", "Coffee shelf", "ingredient"),
+            ("demo:peas", "Freezer peas", "mocked:frozen-peas", 600, "Freezer", "Door bin", "ingredient"),
+            ("demo:curry", "Curry portions", "mocked:recipe:chicken-curry", 3, "Fridge", "Top shelf", "meal"),
+            ("demo:vegetables", "Roast vegetables", "mocked:recipe:roast-vegetables", 4, "Fridge", "Top shelf", "meal"),
+            ("demo:meal-rice", "Cooked rice", "mocked:recipe:rice", 1, "Fridge", "Top shelf", "meal"),
+            ("demo:lentil-loaf", "Lentil loaf", "mocked:recipe:lentil-loaf", 0, "Freezer", "Top shelf", "recipe"),
         )
         created = 0
-        for tag_id, name, item_id, quantity, location, content_kind in examples:
+        for tag_id, name, item_id, quantity, location, sublocation, content_kind in examples:
             item = foods.get(item_id) or recipes.get(item_id)
             if item is None:
                 continue
@@ -1458,6 +1460,7 @@ class MiseEnPlaceAssistantInventory:
                 name=name,
                 quantity=quantity,
                 location=location,
+                sublocation=sublocation,
                 unit=item["unit"],
                 item_id=item["id"],
                 item_label=item["label"],
@@ -1468,6 +1471,30 @@ class MiseEnPlaceAssistantInventory:
             )
             created += 1
         return created
+
+    def _ensure_mock_demo_sublocations(self) -> bool:
+        """Backfill stable mocked demo containers into configured sublocations."""
+        demo_sublocations = {
+            "demo:spinach": "Bottom drawer",
+            "demo:eggs-low": "Door bin",
+            "demo:milk-empty": "Door bin",
+            "demo:rice": "Dry goods",
+            "demo:coffee": "Coffee shelf",
+            "demo:peas": "Door bin",
+            "demo:curry": "Top shelf",
+            "demo:vegetables": "Top shelf",
+            "demo:meal-rice": "Top shelf",
+            "demo:lentil-loaf": "Top shelf",
+        }
+        changed = False
+        for tag_id, sublocation in demo_sublocations.items():
+            container = self.containers.get(tag_id)
+            if not container or container.get("sublocation"):
+                continue
+            container["sublocation"] = sublocation
+            container["updated_at"] = _utc_now()
+            changed = True
+        return changed
 
     async def async_update_container(
         self,

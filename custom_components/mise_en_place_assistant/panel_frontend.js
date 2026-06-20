@@ -11,6 +11,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this._showLocation ??= false;
     this._editingLocation ??= "";
     this._selectedLocation ??= "";
+    this._selectedSublocation ??= "";
     this._createContainerLocation ??= "";
     this._containerContentKind ??= "ingredient";
     this._busyAction ??= "";
@@ -393,6 +394,64 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           font-weight: 700;
         }
         .location-card-body { padding: 12px 15px 15px; }
+        .storage-layout {
+          display: grid;
+          grid-template-columns: minmax(320px, 0.42fr) minmax(0, 0.58fr);
+          gap: 14px;
+          align-items: start;
+        }
+        .storage-left {
+          display: grid;
+          gap: 12px;
+        }
+        .storage-detail {
+          position: sticky;
+          top: 16px;
+          max-height: calc(100vh - 120px);
+          overflow: auto;
+        }
+        .storage-detail-header {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: flex-start;
+          margin-bottom: 12px;
+        }
+        .storage-detail-title {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          min-width: 0;
+        }
+        .storage-detail-title ha-icon {
+          color: var(--primary-color);
+          --mdc-icon-size: 24px;
+          flex: 0 0 auto;
+        }
+        .sublocation-list {
+          display: grid;
+          gap: 7px;
+        }
+        .sublocation-button {
+          width: 100%;
+          display: flex;
+          justify-content: space-between;
+          gap: 8px;
+          align-items: center;
+          border: 1px solid var(--divider-color);
+          background: var(--secondary-background-color, rgba(128,128,128,.04));
+          color: var(--primary-text-color);
+          text-align: left;
+        }
+        .sublocation-button.active {
+          border-color: var(--primary-color);
+          background: color-mix(in srgb, var(--primary-color) 10%, var(--card-background-color));
+        }
+        .sublocation-button span {
+          color: var(--secondary-text-color);
+          font-size: 12px;
+          font-weight: 750;
+        }
         .location-overview {
           display: grid;
           gap: 10px;
@@ -743,6 +802,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           .location-count { justify-items: start; }
           .location-card-actions { justify-content: flex-start; }
           .location-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .storage-layout { grid-template-columns: 1fr; }
+          .storage-detail { position: static; max-height: none; }
           .row { grid-template-columns: 1fr; }
           .row-side { justify-items: start; }
           .qty { text-align: left; }
@@ -788,6 +849,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           return;
         }
         this._selectedLocation = card.dataset.selectLocation;
+        this._selectedSublocation = "";
         this._render();
       };
       card.addEventListener("click", selectLocation);
@@ -799,6 +861,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         selectLocation(event);
       });
     });
+    this.shadowRoot.querySelectorAll("[data-select-sublocation]").forEach((button) => button.addEventListener("click", () => {
+      if (this._isBusy()) return;
+      this._selectedLocation = button.dataset.locationId || this._selectedLocation;
+      this._selectedSublocation = button.dataset.selectSublocation || "";
+      this._render();
+    }));
     this.shadowRoot.querySelectorAll("[data-edit-location]").forEach((button) => button.addEventListener("click", () => { if (this._isBusy()) return; this._editingLocation = button.dataset.editLocation; this._showLocation = true; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-add-container-location]").forEach((button) => button.addEventListener("click", () => this._openCreateContainer(button.dataset.addContainerLocation)));
     this.shadowRoot.querySelectorAll("[data-delete-location]").forEach((button) => button.addEventListener("click", () => this._deleteLocation(button.dataset.deleteLocation, button.dataset.locationName, button.dataset.locationProvider, button.dataset.locationLocal)));
@@ -904,16 +972,23 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       ? this._selectedLocation
       : locations[0]?.id || "";
     this._selectedLocation = selectedLocation;
+    const selectedLocationRecord = locations.find((location) => location.id === selectedLocation) || null;
+    const sublocations = selectedLocationRecord ? this._locationSublocations(selectedLocationRecord, containers) : [];
+    const selectedSublocation = sublocations.some((sublocation) => sublocation.name === this._selectedSublocation)
+      ? this._selectedSublocation
+      : sublocations[0]?.name || "Main";
+    this._selectedSublocation = selectedSublocation;
     return `
       ${this._showLocation ? this._locationForm(areas, editingLocation || null) : ""}
       ${this._showCreate ? this._createForm(editableLocations, foods, recipes) : ""}
-      <section class="stack">
-        <div class="stack">
+      <section class="storage-layout">
+        <div class="storage-left">
           <section class="card">
             <div class="toolbar"><h2>Storage locations</h2><div class="actions"><button type="button" id="add-location">Add location</button></div></div>
           </section>
-          ${locations.map((location) => this._locationCard(location, containers, locations, location.id === selectedLocation)).join("") || this._emptyCard("Create storage locations in Grocy, or enable DEV mode for mocked locations.")}
+          ${locations.map((location) => this._locationCard(location, containers, locations, location.id === selectedLocation, selectedSublocation)).join("") || this._emptyCard("Create storage locations in Grocy, or enable DEV mode for mocked locations.")}
         </div>
+        ${selectedLocationRecord ? this._storageDetail(selectedLocationRecord, selectedSublocation, containers, locations) : ""}
       </section>
     `;
   }
@@ -1900,14 +1975,10 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     </div>`;
   }
 
-  _locationCard(location, containers = [], locations = [], selected = false) {
+  _locationCard(location, containers = [], locations = [], selected = false, selectedSublocation = "") {
     const health = location.health || {};
-    const readings = Object.entries(health.readings || {}).map(([role, reading]) => `<div class="reading"><strong>${this._safe(role.replaceAll("_", " "))}</strong><br>${this._safe(reading.state)}${reading.unit ? ` ${this._safe(reading.unit)}` : ""}</div>`).join("");
     const sublocations = (location.sublocations || []).map((sublocation) => `<span class="pill">${this._safe(sublocation)}</span>`).join("");
-    const contents = selected ? this._locationContents(location, containers, locations) : "";
-    const monitoring = selected ? this._locationMonitoring(health, readings) : "";
-    const facts = selected ? this._locationFacts(location, containers, health) : "";
-    const problems = selected && health.problems?.length ? `<div class="location-problems"><ha-icon icon="mdi:alert"></ha-icon><span>${this._safe(health.problems.join(" · "))}</span></div>` : "";
+    const sublocationNav = selected ? this._sublocationNav(location, containers, selectedSublocation) : "";
     const removeButton = location.provider === "mocked" && location.local
       ? `<button class="icon-button danger" data-delete-location="${this._safe(location.id)}" data-location-name="${this._safe(location.name)}" data-location-provider="${this._safe(location.provider || "")}" data-location-local="true" title="Remove location" aria-label="Remove location"><ha-icon icon="mdi:trash-can-outline"></ha-icon></button>`
       : "";
@@ -1935,10 +2006,68 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <div class="location-count"><strong>${this._safe(location.containers)}</strong><span>containers</span>${actions}</div>
       </div>
       <div class="location-card-body">
-        ${selected ? `<section class="location-overview">${facts}${monitoring}${problems}</section>` : ""}
-        ${contents}
+        ${sublocationNav}
       </div>
     </article>`;
+  }
+
+  _storageDetail(location, selectedSublocation, containers = [], locations = []) {
+    const health = location.health || {};
+    const readings = Object.entries(health.readings || {}).map(([role, reading]) => `<div class="reading"><strong>${this._safe(role.replaceAll("_", " "))}</strong><br>${this._safe(reading.state)}${reading.unit ? ` ${this._safe(reading.unit)}` : ""}</div>`).join("");
+    const matching = containers
+      .filter((container) => container.location_id === location.id && (container.sublocation || "Main") === selectedSublocation)
+      .sort((a, b) => [
+        (a.item_label || a.name || "").localeCompare(b.item_label || b.name || ""),
+        (a.name || "").localeCompare(b.name || ""),
+      ].find((result) => result !== 0) || 0);
+    const problems = health.problems?.length ? `<div class="location-problems"><ha-icon icon="mdi:alert"></ha-icon><span>${this._safe(health.problems.join(" · "))}</span></div>` : "";
+    const locationType = location.location_type || "other";
+    return `<section class="card storage-detail">
+      <div class="storage-detail-header">
+        <div class="storage-detail-title">
+          <ha-icon icon="${this._locationTypeIcon(locationType)}"></ha-icon>
+          <div>
+            <h2>${this._safe(location.name)}</h2>
+            <p class="muted subline">${this._safe(selectedSublocation)} · ${this._safe(matching.length)} ${matching.length === 1 ? "container" : "containers"}</p>
+          </div>
+        </div>
+        <div class="actions">${location.editable === false ? "" : `<button class="icon-button" data-add-container-location="${this._safe(location.id)}" title="Add container here" aria-label="Add container here"><ha-icon icon="mdi:plus-box-outline"></ha-icon></button>`}</div>
+      </div>
+      <section class="location-overview">
+        ${this._locationFacts(location, containers, health)}
+        ${this._locationMonitoring(health, readings)}
+        ${problems}
+      </section>
+      <div class="location-contents">
+        ${matching.length ? matching.map((item) => this._locationContentRow(item, locations)).join("") : this._empty(`No containers in ${selectedSublocation}.`)}
+      </div>
+    </section>`;
+  }
+
+  _locationSublocations(location, containers = []) {
+    const counts = new Map();
+    for (const container of containers.filter((item) => item.location_id === location.id)) {
+      const name = container.sublocation || "Main";
+      counts.set(name, (counts.get(name) || 0) + 1);
+    }
+    for (const name of location.sublocations || []) {
+      if (!counts.has(name)) {
+        counts.set(name, 0);
+      }
+    }
+    if (!counts.size) {
+      counts.set("Main", 0);
+    }
+    return Array.from(counts.entries()).map(([name, count]) => ({ name, count }));
+  }
+
+  _sublocationNav(location, containers = [], selectedSublocation = "") {
+    return `<div class="sublocation-list">${this._locationSublocations(location, containers).map((sublocation) => `
+      <button type="button" class="sublocation-button${sublocation.name === selectedSublocation ? " active" : ""}" data-location-id="${this._safe(location.id)}" data-select-sublocation="${this._safe(sublocation.name)}">
+        <strong>${this._safe(sublocation.name)}</strong>
+        <span>${this._safe(sublocation.count)} ${sublocation.count === 1 ? "container" : "containers"}</span>
+      </button>
+    `).join("")}</div>`;
   }
 
   _locationFacts(location, containers = [], health = {}) {

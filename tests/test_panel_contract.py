@@ -9,6 +9,7 @@ PANEL_SOURCE = (ROOT / "custom_components/mise_en_place_assistant/panel.py").rea
 INIT_SOURCE = (ROOT / "custom_components/mise_en_place_assistant/__init__.py").read_text()
 STORE_SOURCE = (ROOT / "custom_components/mise_en_place_assistant/store.py").read_text()
 FRONTEND_SOURCE = (ROOT / "custom_components/mise_en_place_assistant/panel_frontend.js").read_text()
+MOCKED_SOURCE = (ROOT / "custom_components/mise_en_place_assistant/mocked.py").read_text()
 M5DIAL_SOURCE = (ROOT / "m5dial/m5dial-mise-en-place-assistant.yaml").read_text()
 
 
@@ -34,6 +35,14 @@ class TestPanelContract(unittest.TestCase):
         self.assertIn("await manager.async_seed_demo_data()", INIT_SOURCE)
         self.assertIn("async_seed_demo_data", STORE_SOURCE)
         self.assertIn("Demo tag IDs are deliberately stable", STORE_SOURCE)
+        self.assertIn('"sublocations": ["Top shelf", "Bottom drawer", "Door bin"]', MOCKED_SOURCE)
+        self.assertIn('"Dry goods"', MOCKED_SOURCE)
+        self.assertIn('"Coffee shelf"', MOCKED_SOURCE)
+        self.assertIn('"demo:spinach", "Produce bin", "mocked:baby-spinach", 180, "Fridge", "Bottom drawer"', STORE_SOURCE)
+        self.assertIn('"demo:curry", "Curry portions", "mocked:recipe:chicken-curry", 3, "Fridge", "Top shelf"', STORE_SOURCE)
+        self.assertIn("sublocation=sublocation", STORE_SOURCE)
+        self.assertIn("_ensure_mock_demo_sublocations", STORE_SOURCE)
+        self.assertIn('changed = self._ensure_mock_demo_sublocations() or changed', STORE_SOURCE)
 
     def test_locations_are_managed_by_stable_id(self) -> None:
         self.assertIn('VOID_LOCATION_ID = "__void__"', (ROOT / "custom_components/mise_en_place_assistant/const.py").read_text())
@@ -112,7 +121,12 @@ class TestPanelContract(unittest.TestCase):
         self.assertIn('this._hass.callService("mise_en_place_assistant", "move_container"', FRONTEND_SOURCE)
         self.assertNotIn("Clear metadata", FRONTEND_SOURCE)
         self.assertIn("_locationCard(location, containers, locations", FRONTEND_SOURCE)
-        self.assertIn("selected ? this._locationContents(location, containers, locations)", FRONTEND_SOURCE)
+        self.assertIn("_storageDetail(selectedLocationRecord, selectedSublocation, containers, locations)", FRONTEND_SOURCE)
+        self.assertIn("_selectedSublocation", FRONTEND_SOURCE)
+        self.assertIn("storage-layout", FRONTEND_SOURCE)
+        self.assertIn("storage-detail", FRONTEND_SOURCE)
+        self.assertIn("sublocation-button", FRONTEND_SOURCE)
+        self.assertIn("[data-select-sublocation]", FRONTEND_SOURCE)
         self.assertIn("this._locationContentAttention(location, containers)", FRONTEND_SOURCE)
         self.assertIn('const sublocation = container.sublocation || "Main"', FRONTEND_SOURCE)
         self.assertIn("location-card type-", FRONTEND_SOURCE)
