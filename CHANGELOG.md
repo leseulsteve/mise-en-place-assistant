@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.9 - 2026-06-20
+
+- Relax config-flow selector schemas for broader Home Assistant compatibility, because a setup form should not 500 just because a selector enum moved the furniture.
+
 ## 0.0.8 - 2026-06-20
 
 - Add Grocy-backed catalog, stock, shopping, and storage-location workflows with HA-owned product review metadata, KitchenOwl shopping-list fallback, richer DEV fixtures, and stable M5Dial location IDs, because treating display names as durable inventory infrastructure was asking a label printer to be a database.
