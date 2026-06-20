@@ -70,6 +70,17 @@ def normalize_quantity(quantity: Any, unit: str | None) -> dict[str, Any]:
     }
 
 
+def normalized_inventory_unit(unit: str | None) -> str | None:
+    """Return a Pint-supported inventory unit, or ``None`` for a custom one."""
+    try:
+        normalized = normalize_quantity(0, unit)
+    except UnitNormalizationError:
+        return None
+    if normalized["unit_dimension"] == "custom":
+        return None
+    return str(normalized["display_unit"])
+
+
 def quantity_in_display_unit(canonical_quantity: Any, display_unit: str | None) -> dict[str, Any]:
     """Represent a compatible canonical quantity in its chosen display unit."""
     target = normalize_quantity(0, display_unit)

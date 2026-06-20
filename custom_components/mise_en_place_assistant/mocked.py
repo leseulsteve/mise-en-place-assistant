@@ -30,3 +30,12 @@ MOCKED_FOODS = [
     {"id": f"mocked:{food_id}", "label": label, "format": package, "unit": unit}
     for food_id, label, package, unit in _FOODS
 ]
+
+# Keep the offline provider useful for the prepared-meal workflow too.
+MOCKED_RECIPES = [
+    {"id": "mocked:recipe:chicken-curry", "label": "Chicken curry", "format": "Batch-friendly curry", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:chicken"], "categories": ["Dinner"]},
+    {"id": "mocked:recipe:roast-chicken", "label": "Roast chicken", "format": "Portioned roast chicken", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:chicken"], "categories": ["Dinner"]},
+    {"id": "mocked:recipe:lentil-loaf", "label": "Lentil loaf", "format": "Vegetarian protein", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:vegetarian"], "categories": ["Dinner"]},
+    {"id": "mocked:recipe:roast-vegetables", "label": "Roast vegetables", "format": "Ready vegetable side", "unit": "portions", "tags": ["mpa:component:vegetable"], "categories": ["Side"]},
+    {"id": "mocked:recipe:rice", "label": "Cooked basmati rice", "format": "Ready starch", "unit": "portions", "tags": ["mpa:component:starch"], "categories": ["Side"]},
+]

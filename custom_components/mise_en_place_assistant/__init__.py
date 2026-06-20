@@ -22,15 +22,14 @@ from .const import (
     DEFAULT_M5DIAL_SERVICE_PREFIX,
     DOMAIN,
     EVENT_MISE_EN_PLACE_ASSISTANT_CREATE_CONTAINER,
-    EVENT_MISE_EN_PLACE_ASSISTANT_MARK_CLEAN,
     EVENT_MISE_EN_PLACE_ASSISTANT_SCAN,
     EVENT_MISE_EN_PLACE_ASSISTANT_UPDATE_CONTAINER,
     EVENT_INVENTORY_CONFIRM,
     PLATFORMS,
     SERVICE_CREATE_CONTAINER,
+    SERVICE_CREATE_RECIPE_CONTAINER,
     SERVICE_CREATE_LOCATION,
     SERVICE_FILL_CONTAINER,
-    SERVICE_MARK_CONTAINER_CLEAN,
     SERVICE_REMOVE_ITEMS,
     SERVICE_SCAN_CONTAINER,
     SERVICE_UPDATE_CONTAINER,
@@ -46,10 +45,11 @@ ATTR_LOCATION = "location"
 ATTR_MODE = "mode"
 ATTR_NAME = "name"
 ATTR_QUANTITY = "quantity"
-ATTR_STATE = "state"
 ATTR_TAG_ID = "tag_id"
 ATTR_UNIT = "unit"
 ATTR_ITEM_ID = "item_id"
+ATTR_RECIPE_ID = "recipe_id"
+ATTR_CONTENT_KIND = "content_kind"
 
 SCAN_MODES = ["set", "add", "remove"]
 
@@ -108,25 +108,29 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             raise ServiceValidationError(str(err)) from err
         _LOGGER.info(
             "Creating Mise en Place Assistant container from service: tag_id=%s item_id=%s quantity=%s location=%s",
-            call.data[ATTR_TAG_ID],
-            call.data.get(ATTR_ITEM_ID),
-            call.data.get(ATTR_QUANTITY, 0),
-            call.data.get(ATTR_LOCATION),
+            call.data[ATTR_TAG_ID], call.data.get(ATTR_ITEM_ID),
+            call.data.get(ATTR_QUANTITY, 0), call.data.get(ATTR_LOCATION),
         )
         try:
             await manager.async_create_container(
-                tag_id=call.data[ATTR_TAG_ID],
-                name=call.data.get(ATTR_NAME),
-                quantity=call.data.get(ATTR_QUANTITY, 0),
-                location=call.data.get(ATTR_LOCATION),
-                state=call.data.get(ATTR_STATE),
-                unit=item["unit"],
-                item_id=item["id"],
-                item_label=item["label"],
-                item_format=item["format"],
-                source_provider=manager.catalog_provider(),
+                tag_id=call.data[ATTR_TAG_ID], name=call.data.get(ATTR_NAME),
+                quantity=call.data.get(ATTR_QUANTITY, 0), location=call.data.get(ATTR_LOCATION),
+                unit=item["unit"], item_id=item["id"], item_label=item["label"],
+                item_format=item["format"], source_provider=manager.catalog_provider(),
             )
         except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def handle_create_recipe_container(call: ServiceCall) -> None:
+        manager = _manager(hass)
+        try:
+            await manager.async_create_recipe_container(
+                recipe_id=call.data[ATTR_RECIPE_ID],
+                content_kind=call.data[ATTR_CONTENT_KIND],
+                tag_id=call.data[ATTR_TAG_ID], name=call.data.get(ATTR_NAME),
+                quantity=call.data.get(ATTR_QUANTITY, 0), location=call.data.get(ATTR_LOCATION),
+            )
+        except (MealieCatalogError, ValueError) as err:
             raise ServiceValidationError(str(err)) from err
 
     async def handle_update_container(call: ServiceCall) -> None:
@@ -138,12 +142,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             except (MealieCatalogError, ValueError) as err:
                 raise ServiceValidationError(str(err)) from err
         _LOGGER.info(
-            "Updating Mise en Place Assistant container from service: tag_id=%s quantity=%s delta=%s location=%s state=%s",
+            "Updating Mise en Place Assistant container from service: tag_id=%s quantity=%s delta=%s location=%s",
             call.data[ATTR_TAG_ID],
             call.data.get(ATTR_QUANTITY),
             call.data.get(ATTR_DELTA),
             call.data.get(ATTR_LOCATION),
-            call.data.get(ATTR_STATE),
         )
         try:
             await manager.async_update_container(
@@ -151,7 +154,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 quantity=call.data.get(ATTR_QUANTITY),
                 delta=call.data.get(ATTR_DELTA),
                 location=call.data.get(ATTR_LOCATION),
-                state=call.data.get(ATTR_STATE),
                 name=call.data.get(ATTR_NAME),
                 unit=call.data.get(ATTR_UNIT) or (item or {}).get("unit"),
                 item_id=(item or {}).get("id"),
@@ -213,23 +215,26 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             mode=call.data.get(ATTR_MODE, "set"),
         )
 
-    async def handle_mark_container_clean(call: ServiceCall) -> None:
-        """Record a washed container without changing its stable NFC identity."""
-        manager = _manager(hass)
-        try:
-            await manager.async_mark_container_clean(
-                call.data[ATTR_TAG_ID], location=call.data.get(ATTR_LOCATION)
-            )
-        except KeyError as err:
-            raise ServiceValidationError(
-                f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
-            ) from err
-
     hass.services.async_register(
         DOMAIN,
         SERVICE_CREATE_LOCATION,
         handle_create_location,
         schema=vol.Schema({vol.Required(ATTR_NAME): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CREATE_RECIPE_CONTAINER,
+        handle_create_recipe_container,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_TAG_ID): cv.string,
+                vol.Required(ATTR_RECIPE_ID): cv.string,
+                vol.Required(ATTR_CONTENT_KIND): vol.In(["recipe", "meal"]),
+                vol.Optional(ATTR_NAME): cv.string,
+                vol.Optional(ATTR_QUANTITY, default=0): _nonnegative_number,
+                vol.Optional(ATTR_LOCATION): cv.string,
+            }
+        ),
     )
     hass.services.async_register(
         DOMAIN,
@@ -241,7 +246,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_NAME): cv.string,
                 vol.Optional(ATTR_QUANTITY, default=0): _nonnegative_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
-                vol.Optional(ATTR_STATE): cv.string,
                 vol.Required(ATTR_ITEM_ID): cv.string,
             }
         ),
@@ -257,7 +261,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_QUANTITY): _nonnegative_number,
                 vol.Optional(ATTR_DELTA): _finite_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
-                vol.Optional(ATTR_STATE): cv.string,
                 vol.Optional(ATTR_UNIT): cv.string,
                 vol.Optional(ATTR_ITEM_ID): cv.string,
             }
@@ -294,17 +297,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Required(ATTR_TAG_ID): cv.string,
                 vol.Optional(ATTR_QUANTITY): _nonnegative_number,
                 vol.Optional(ATTR_MODE, default="set"): vol.In(SCAN_MODES),
-            }
-        ),
-    )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_MARK_CONTAINER_CLEAN,
-        handle_mark_container_clean,
-        schema=vol.Schema(
-            {
-                vol.Required(ATTR_TAG_ID): cv.string,
-                vol.Optional(ATTR_LOCATION): cv.string,
             }
         ),
     )
@@ -433,31 +425,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "quantity": float(container.get("quantity", 0)),
                 "unit": container.get("unit") or DEFAULT_UNIT,
                 "location": container.get("location") or "unknown",
-                "state": container.get("state") or "unknown",
-                "incoming_locations": payload["locations"],
-            },
-        )
-
-    async def show_clean_flow(tag_id: str, container: dict) -> None:
-        """Ask for confirmation when a dirty container is scanned after washing."""
-        service_prefix = entry.options.get(
-            CONF_M5DIAL_SERVICE_PREFIX,
-            entry.data.get(CONF_M5DIAL_SERVICE_PREFIX, DEFAULT_M5DIAL_SERVICE_PREFIX),
-        )
-
-        if not hass.services.has_service("esphome", f"{service_prefix}_show_clean_container"):
-            _LOGGER.warning(
-                "M5Dial clean flow is not available yet; using the existing known-container flow"
-            )
-            await show_known_flow(tag_id, container)
-            return
-        payload = await manager.async_catalog_payload()
-        await call_m5dial(
-            "show_clean_container",
-            {
-                "tag_id": tag_id,
-                "container_name": container.get("name") or manager.default_container_name(tag_id),
-                "location": container.get("location") or "Container storage",
                 "incoming_locations": payload["locations"],
             },
         )
@@ -484,13 +451,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Ignoring Mise en Place Assistant scan event without tag_id")
             return
         container = manager.get_container(tag_id)
-        if container and container.get("state") == "clean":
-            _LOGGER.info("Clean Mise en Place Assistant NFC tag scanned for refill: tag_id=%s", tag_id)
-            hass.async_create_task(show_create_flow(tag_id))
-        elif container and container.get("state") == "dirty":
-            _LOGGER.info("Dirty Mise en Place Assistant NFC tag scanned: tag_id=%s", tag_id)
-            hass.async_create_task(show_clean_flow(tag_id, container))
-        elif container:
+        if container:
             _LOGGER.info("Known Mise en Place Assistant NFC tag scanned: tag_id=%s", tag_id)
             hass.async_create_task(show_known_flow(tag_id, container))
         else:
@@ -535,7 +496,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 item = await manager.async_catalog_item(event.data.get(ATTR_ITEM_ID, ""))
                 await manager.async_create_container(
                     tag_id=tag_id, quantity=quantity, location=event.data.get(ATTR_LOCATION),
-                    state=event.data.get(ATTR_STATE, "unknown"), unit=item["unit"], item_id=item["id"],
+                    unit=item["unit"], item_id=item["id"],
                     item_label=item["label"], item_format=item["format"], source_provider=manager.catalog_provider(),
                 )
             except (MealieCatalogError, ValueError) as err:
@@ -617,37 +578,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.async_create_task(update_from_dial())
 
     @callback
-    def handle_clean_from_dial(event) -> None:
-        """Mark a known container clean after the Dial's post-wash scan."""
-        if not is_enrolled_dial_event(event):
-            return
-        tag_id = event.data.get(ATTR_TAG_ID)
-        if not tag_id:
-            _LOGGER.debug("Ignoring Mise en Place Assistant clean event without tag_id")
-            return
-        async def clean_from_dial() -> None:
-            try:
-                await manager.async_mark_container_clean(tag_id, location=event.data.get(ATTR_LOCATION))
-            except (KeyError, ValueError) as err:
-                _LOGGER.warning("Could not mark M5Dial container clean for tag_id=%s: %s", tag_id, err)
-                await show_dial_operation_result(
-                    tag_id,
-                    success=False,
-                    message="Could not save",
-                )
-            except Exception:  # noqa: BLE001 - the Dial needs an explicit write failure.
-                _LOGGER.exception("Could not mark M5Dial container clean for tag_id=%s", tag_id)
-                await show_dial_operation_result(
-                    tag_id,
-                    success=False,
-                    message="Could not save",
-                )
-            else:
-                await show_dial_operation_result(tag_id, success=True, message="Saved")
-
-        hass.async_create_task(clean_from_dial())
-
-    @callback
     def handle_inventory_confirm(event) -> None:
         """Handle scanner events from ESPHome/M5Dial."""
         if not is_enrolled_dial_event(event):
@@ -687,9 +617,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     entry.async_on_unload(
         hass.bus.async_listen(EVENT_MISE_EN_PLACE_ASSISTANT_UPDATE_CONTAINER, handle_update_from_dial)
-    )
-    entry.async_on_unload(
-        hass.bus.async_listen(EVENT_MISE_EN_PLACE_ASSISTANT_MARK_CLEAN, handle_clean_from_dial)
     )
     _LOGGER.debug("Registered Mise en Place Assistant event listeners")
     return True

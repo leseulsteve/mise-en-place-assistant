@@ -95,6 +95,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const containers = data?.containers || [];
     const items = data?.items || [];
     const foods = data?.foods || [];
+    const recipes = data?.recipes || [];
+    const mealInventory = data?.meal_inventory?.components || [];
     const locations = data?.locations || [];
     const logbook = data?.logbook || [];
     this.shadowRoot.innerHTML = `
@@ -252,16 +254,19 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           </div>
         </header>
         ${this._error ? `<div class="error">${this._safe(this._error)}</div>` : ""}
-        ${this._showCreate ? this._createForm(locations, foods) : ""}
+        ${this._showCreate ? this._createForm(locations, foods, recipes) : ""}
         <section class="grid">
           ${this._metric("Containers", summary.containers ?? 0)}
           ${this._metric("Locations", summary.locations ?? 0)}
           ${this._metric("Food items", summary.items ?? 0)}
           ${this._metric("Low", summary.low ?? 0, summary.low ? "warn" : "")}
-          ${this._metric("To wash", summary.dirty ?? 0, summary.dirty ? "warn" : "")}
         </section>
         <section class="sections">
           <div class="stack">
+            <section class="card">
+              <h2>Ready meal inventory</h2>
+              ${mealInventory.length ? mealInventory.map((entry) => this._mealInventoryRow(entry)).join("") : `<p class="muted">Tag Mealie recipes with mpa:component:protein, mpa:component:starch, or mpa:component:vegetable, then store them as meals.</p>`}
+            </section>
             <section class="card">
               <h2>Inventory by product</h2>
               ${items.length ? items.map((item) => this._itemRow(item)).join("") : `<p class="muted">No filled containers yet.</p>`}
@@ -304,9 +309,10 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     return `<article class="card"><p class="muted">${this._safe(label)}</p><p class="metric ${klass}">${this._safe(value)}</p></article>`;
   }
 
-  _createForm(locations, foods) {
+  _createForm(locations, foods, recipes) {
     const locationOptions = locations.map((location) => `<option value="${this._safe(location.name)}">${this._safe(location.name)}</option>`).join("");
     const foodOptions = foods.map((food) => `<option value="${this._safe(food.id)}">${this._safe(food.label)}</option>`).join("");
+    const recipeOptions = recipes.map((recipe) => `<option value="${this._safe(recipe.id)}">${this._safe(recipe.label)}</option>`).join("");
     return `
       <form class="card form" id="create-form">
         <h2>Add a reusable container</h2>
@@ -314,12 +320,14 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <div class="form-grid">
           <label>NFC tag<input name="tag_id" required placeholder="04:A1:C2" /></label>
           <label>Container name<input name="name" placeholder="Freezer bin 1" /></label>
-          <label>Catalog food<select name="item_id" required><option value="">Choose a catalog food</option>${foodOptions}</select></label>
+          <label>Contents<select name="content_kind"><option value="ingredient">Ingredient</option><option value="recipe">Recipe batch</option><option value="meal">Ready meal</option></select></label>
+          <label>Catalog food<select name="item_id"><option value="">Choose a catalog food</option>${foodOptions}</select></label>
+          <label>Mealie recipe<select name="recipe_id"><option value="">Choose a Mealie recipe</option>${recipeOptions}</select></label>
           <label>Quantity<input name="quantity" required type="number" min="0" step="any" value="1" /></label>
           <label>Location<input name="location" list="locations" placeholder="Freezer" /></label>
           <datalist id="locations">${locationOptions}</datalist>
         </div>
-        <p class="muted">Food names and units come from the configured catalog. Container amounts remain local to each NFC tag.</p>
+        <p class="muted">Ingredients use a Mealie food. Recipe batches and meals use the yield unit configured in Mealie.</p>
         <div class="actions"><button type="button" class="secondary" id="cancel-create">Cancel</button><button type="submit">Save container</button></div>
       </form>
     `;
@@ -331,13 +339,18 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const value = (name) => form.elements[name].value.trim();
     const data = {
       tag_id: value("tag_id"),
-      item_id: value("item_id"),
       quantity: Number(value("quantity")),
     };
+    const contentKind = value("content_kind");
+    if (contentKind === "ingredient") data.item_id = value("item_id");
+    else {
+      data.recipe_id = value("recipe_id");
+      data.content_kind = contentKind;
+    }
     if (value("name")) data.name = value("name");
     if (value("location")) data.location = value("location");
     try {
-      await this._hass.callService("mise_en_place_assistant", "create_container", data);
+      await this._hass.callService("mise_en_place_assistant", contentKind === "ingredient" ? "create_container" : "create_recipe_container", data);
       this._showCreate = false;
       await this._load();
     } catch (err) {
@@ -351,8 +364,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       <div class="row">
           <div>
           <p class="name">${this._safe(item.name)}</p>
-          <p class="muted">${this._safe(item.item_label)} &middot; ${this._safe(item.location)}</p>
-          <p class="muted">${this._safe(item.format || item.state)}</p>
+          <p class="muted">${this._safe(item.content_kind)} &middot; ${this._safe(item.item_label)} &middot; ${this._safe(item.location)}</p>
+          <p class="muted">${this._safe(item.format)}</p>
           <span class="pill">${this._safe(item.tag_id || "no tag")}</span>
         </div>
         <div class="qty ${klass}">${this._safe(item.quantity)}<br><span class="muted">${this._safe(item.unit)}</span></div>
@@ -363,13 +376,19 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _attentionRows(data) {
     const empty = data?.empty_containers || [];
     const low = data?.low_containers || [];
-    const dirty = data?.dirty_containers || [];
     const rows = [
-      ...dirty.map((item) => this._containerRow(item, "warn")),
       ...empty.map((item) => this._containerRow(item, "empty")),
       ...low.map((item) => this._containerRow(item, "warn")),
     ];
     return rows.length ? rows.join("") : `<p class="muted">Nothing needs attention.</p>`;
+  }
+
+  _mealInventoryRow(entry) {
+    const formatTotals = (totals) => Object.entries(totals || {}).map(([unit, amount]) => `${amount} ${unit}`).join(" + ");
+    const proteins = Object.entries(entry.proteins || {}).map(([name, totals]) => `${name}: ${formatTotals(totals)}`).join(" · ");
+    const recipes = Object.entries(entry.recipes || {}).map(([name, totals]) => `${name}: ${formatTotals(totals)}`).join(" · ");
+    const quantities = Object.entries(entry.quantities || {}).map(([unit, amount]) => `${amount} ${unit}`).join(" + ");
+    return `<div class="row"><div><p class="name">${this._safe(entry.component)}</p><p class="muted">${this._safe(proteins || recipes)}</p></div><div class="qty">${this._safe(quantities)}</div></div>`;
   }
 
   _locationRow(location) {

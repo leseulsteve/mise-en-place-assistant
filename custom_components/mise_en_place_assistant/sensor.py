@@ -95,7 +95,7 @@ class MiseEnPlaceAssistantContainerStatusSensor(MiseEnPlaceAssistantBaseSensor):
 
     @property
     def native_value(self) -> StateType:
-        return self.container.get("state") or "unknown"
+        return self.manager.item_label_for_container(self.container)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -106,6 +106,7 @@ class MiseEnPlaceAssistantContainerStatusSensor(MiseEnPlaceAssistantBaseSensor):
             "item_id": container.get("item_id"),
             "item_label": container.get("item_label"),
             "item_format": container.get("item_format"),
+            "content_kind": container.get("content_kind"),
             "quantity": container.get("quantity", 0),
             "unit": container.get("unit"),
             "canonical_quantity": container.get("canonical_quantity", container.get("quantity", 0)),

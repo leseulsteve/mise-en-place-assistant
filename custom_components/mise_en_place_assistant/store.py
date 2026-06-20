@@ -12,20 +12,21 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_API_TOKEN, CONF_HOST
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
 from .const import (
-    CONTAINER_STATE_CLEAN,
-    CONTAINER_STATE_DIRTY,
-    CONTAINER_STATE_EMPTY,
-    CONTAINER_STATE_FILLED,
     CONF_CATALOG_PROVIDER,
     DEFAULT_UNIT,
     DOMAIN,
     CONF_MEALIE_TOKEN,
     CONF_MEALIE_ENTRY_ID,
     CONF_MEALIE_URL,
+    CONF_M5DIAL_SERVICE_PREFIX,
+    DEFAULT_DIAL_THEME,
+    DEFAULT_M5DIAL_SERVICE_PREFIX,
+    DIAL_THEMES,
     DEFAULT_CATALOG_PROVIDER,
     EVENT_MISE_EN_PLACE_ASSISTANT_UPDATED,
     SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED,
@@ -34,7 +35,7 @@ from .const import (
     PROVIDER_MOCKED,
 )
 from .mealie import MealieCatalogClient, MealieCatalogError
-from .mocked import MOCKED_FOODS
+from .mocked import MOCKED_FOODS, MOCKED_RECIPES
 from .units import normalize_quantity, quantity_in_display_unit, units_are_compatible
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,6 +67,8 @@ class MiseEnPlaceAssistantInventory:
             "logbook": [],
             "devices": {},
             "catalog": [],
+            "recipes": [],
+            "dial_theme": DEFAULT_DIAL_THEME,
         }
         self._listeners: list[Callable[[], None]] = []
 
@@ -106,7 +109,7 @@ class MiseEnPlaceAssistantInventory:
     def _ensure_schema(self) -> bool:
         """Ensure old Mise en Place Assistant data remains usable by the reusable-container model."""
         changed = False
-        for key, default in (("items", {}), ("products", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {}), ("catalog", [])):
+        for key, default in (("items", {}), ("products", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {}), ("catalog", []), ("recipes", []), ("dial_theme", DEFAULT_DIAL_THEME)):
             if key not in self.data:
                 self.data[key] = default
                 changed = True
@@ -129,18 +132,17 @@ class MiseEnPlaceAssistantInventory:
             changed = product_changed or changed
 
         for tag_id, container in self.containers.items():
+            if "content_kind" not in container:
+                container["content_kind"] = "ingredient" if container.get("item_id") else None
+                changed = True
             if not container.get("tag_id"):
                 container["tag_id"] = tag_id
                 changed = True
             if not container.get("name"):
                 container["name"] = self.default_container_name(tag_id)
                 changed = True
-            if not container.get("state") or container.get("state") == "unknown":
-                container["state"] = (
-                    CONTAINER_STATE_FILLED
-                    if float(container.get("canonical_quantity", container.get("quantity", 0))) > 0
-                    else CONTAINER_STATE_EMPTY
-                )
+            if "state" in container:
+                container.pop("state")
                 changed = True
             if "created_at" not in container:
                 container["created_at"] = _utc_now()
@@ -170,6 +172,33 @@ class MiseEnPlaceAssistantInventory:
                     changed = True
                 changed = product_changed or changed
         return changed
+
+    @property
+    def dial_theme(self) -> str:
+        """Return the selected Dial theme, falling back safely for old data."""
+        theme = self.data.get("dial_theme", DEFAULT_DIAL_THEME)
+        return theme if theme in DIAL_THEMES else DEFAULT_DIAL_THEME
+
+    async def async_set_dial_theme(self, theme: str) -> None:
+        """Persist and apply a Home Assistant-selected Dial theme."""
+        if theme not in DIAL_THEMES:
+            raise ValueError(f"Unsupported Dial theme: {theme}")
+        service_prefix = self.entry.options.get(
+            CONF_M5DIAL_SERVICE_PREFIX,
+            self.entry.data.get(CONF_M5DIAL_SERVICE_PREFIX, DEFAULT_M5DIAL_SERVICE_PREFIX),
+        )
+        service = f"{service_prefix}_set_theme"
+        if not self.hass.services.has_service("esphome", service):
+            raise HomeAssistantError("The enrolled M5Dial does not support theme selection")
+        await self.hass.services.async_call(
+            "esphome",
+            service,
+            {"theme": theme},
+            blocking=True,
+        )
+        if self.data.get("dial_theme") != theme:
+            self.data["dial_theme"] = theme
+            await self.async_save()
 
     @property
     def containers(self) -> dict[str, dict[str, Any]]:
@@ -206,7 +235,7 @@ class MiseEnPlaceAssistantInventory:
         """Return the selected provider's food catalog and local locations."""
         items = await self.async_refresh_catalog()
         locations = [location["name"] for location in self.locations.values()]
-        return {"items": items, "locations": locations}
+        return {"items": items, "recipes": self.recipe_items(), "locations": locations}
 
     def catalog_provider(self) -> str:
         """Return the configured catalog provider, preserving old entries as Mocked."""
@@ -220,13 +249,15 @@ class MiseEnPlaceAssistantInventory:
         provider = self.catalog_provider()
         if provider == PROVIDER_MOCKED:
             items = MOCKED_FOODS
+            recipes = MOCKED_RECIPES
         elif provider == PROVIDER_MEALIE:
-            items = await self._async_fetch_mealie_items()
+            items, recipes = await self._async_fetch_mealie_catalog()
         else:
             raise MealieCatalogError(f"Unsupported catalog provider: {provider}")
-        changed = items != self.data.get("catalog")
+        changed = items != self.data.get("catalog") or recipes != self.data.get("recipes")
         if changed:
             self.data["catalog"] = items
+            self.data["recipes"] = recipes
         foods_by_id = {item["id"]: item for item in items}
         for product in list(self.products.values()):
             source = product.get("source") or {}
@@ -240,8 +271,8 @@ class MiseEnPlaceAssistantInventory:
             await self.async_save(notify=False)
         return items
 
-    async def _async_fetch_mealie_items(self) -> list[dict[str, str]]:
-        """Fetch Mealie foods for the Mealie provider."""
+    async def _async_fetch_mealie_catalog(self) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+        """Fetch Mealie foods and recipes for the Mealie provider."""
         source_entry_id = self.entry.options.get(
             CONF_MEALIE_ENTRY_ID, self.entry.data.get(CONF_MEALIE_ENTRY_ID)
         )
@@ -261,15 +292,22 @@ class MiseEnPlaceAssistantInventory:
         if not url or not token:
             raise MealieCatalogError("Mealie URL and API token must be configured")
         try:
-            items = await MealieCatalogClient(self.hass, url, token).async_fetch_foods()
+            client = MealieCatalogClient(self.hass, url, token)
+            items = await client.async_fetch_foods()
+            recipes = await client.async_fetch_recipes()
         except (MealieCatalogError, ValueError) as err:
             raise MealieCatalogError("Mealie food catalog is unavailable") from err
-        return items
+        return items, recipes
 
     def catalog_items(self) -> list[dict[str, str]]:
         """Return the most recently verified selected-provider catalog."""
         items = self.data.get("catalog", [])
         return items if isinstance(items, list) else []
+
+    def recipe_items(self) -> list[dict[str, Any]]:
+        """Return the most recently verified recipe catalog."""
+        recipes = self.data.get("recipes", [])
+        return recipes if isinstance(recipes, list) else []
 
     async def async_catalog_item(self, item_id: str) -> dict[str, str]:
         """Resolve a selected food against the configured provider before saving."""
@@ -277,6 +315,14 @@ class MiseEnPlaceAssistantInventory:
             if item["id"] == item_id:
                 return item
         raise ValueError("Selected food no longer exists in the configured catalog")
+
+    async def async_recipe_item(self, recipe_id: str) -> dict[str, Any]:
+        """Resolve a recipe against the provider before saving a prepared batch."""
+        await self.async_refresh_catalog()
+        for recipe in self.recipe_items():
+            if recipe["id"] == recipe_id:
+                return recipe
+        raise ValueError("Selected recipe no longer exists in the configured catalog")
 
     def get_container(self, tag_id: str) -> dict[str, Any] | None:
         return self.containers.get(self._normalize_tag_id(tag_id))
@@ -320,12 +366,13 @@ class MiseEnPlaceAssistantInventory:
         name: str | None = None,
         quantity: int | float = 0,
         location: str | None = None,
-        state: str | None = None,
         unit: str = DEFAULT_UNIT,
         item_id: str | None = None,
         item_label: str | None = None,
         item_format: str | None = None,
         source_provider: str = "local",
+        content_kind: str = "ingredient",
+        classification: dict[str, str] | None = None,
     ) -> None:
         tag_id = self._normalize_tag_id(tag_id)
         old = self.containers.get(tag_id, {})
@@ -333,12 +380,11 @@ class MiseEnPlaceAssistantInventory:
         location = self.ensure_location(location)
         now = _utc_now()
         is_new = not old
-        chosen_state = (
-            state
-            if state and state != "unknown"
-            else (CONTAINER_STATE_FILLED if quantity_data["canonical_quantity"] else CONTAINER_STATE_EMPTY)
+        if content_kind not in {"ingredient", "recipe", "meal"}:
+            raise ValueError("content_kind must be ingredient, recipe, or meal")
+        product_id = self._resolve_product_id(
+            item_id, item_label, item_format, unit, source_provider, classification
         )
-        product_id = self._resolve_product_id(item_id, item_label, item_format, unit, source_provider)
         self.containers[tag_id] = {
             "tag_id": tag_id,
             "name": self._normalize_optional(name) or old.get("name") or self.default_container_name(tag_id),
@@ -346,9 +392,9 @@ class MiseEnPlaceAssistantInventory:
             "item_label": item_label,
             "item_format": item_format,
             "product_id": product_id,
+            "content_kind": content_kind,
             **quantity_data,
             "location": location,
-            "state": chosen_state,
             "unit": unit or DEFAULT_UNIT,
             "created_at": old.get("created_at", now),
             "updated_at": now,
@@ -359,11 +405,31 @@ class MiseEnPlaceAssistantInventory:
             async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "product", product_id)
         self._add_log_entry(
             "Container created" if is_new else "Container refilled",
-            f"{self.containers[tag_id]['name']} is {chosen_state} in {location or 'no location'}.",
-            {"tag_id": tag_id, "quantity": quantity_data["quantity"], "unit": quantity_data["unit"], "canonical_quantity": quantity_data["canonical_quantity"], "canonical_unit": quantity_data["canonical_unit"], "location": location, "state": chosen_state,
+            f"{self.containers[tag_id]['name']} now contains {self.containers[tag_id]['item_label'] or 'nothing'} in {location or 'no location'}.",
+            {"tag_id": tag_id, "quantity": quantity_data["quantity"], "unit": quantity_data["unit"], "canonical_quantity": quantity_data["canonical_quantity"], "canonical_unit": quantity_data["canonical_unit"], "location": location,
              "product": self.product_snapshot(self.containers[tag_id])},
         )
         await self.async_save()
+
+    @staticmethod
+    def _recipe_classification(recipe: dict[str, Any]) -> dict[str, str]:
+        tags = {str(tag).casefold() for tag in recipe.get("tags", [])}
+        component = next((tag[14:] for tag in tags if tag.startswith("mpa:component:")), None)
+        protein = next((tag[20:] for tag in tags if tag.startswith("mpa:primary-protein:")), None)
+        return {key: value for key, value in {"component": component, "primary_protein": protein}.items() if value}
+
+    async def async_create_recipe_container(
+        self, *, recipe_id: str, content_kind: str, tag_id: str, name: str | None = None,
+        quantity: int | float = 0, location: str | None = None,
+    ) -> None:
+        """Create a portion-counted recipe or ready-meal container."""
+        recipe = await self.async_recipe_item(recipe_id)
+        await self.async_create_container(
+            tag_id=tag_id, name=name, quantity=quantity, location=location,
+            unit=recipe["unit"], item_id=recipe["id"], item_label=recipe["label"],
+            item_format=recipe["format"], source_provider="mealie_recipe",
+            content_kind=content_kind, classification=self._recipe_classification(recipe),
+        )
 
     async def async_update_container(
         self,
@@ -372,7 +438,6 @@ class MiseEnPlaceAssistantInventory:
         quantity: int | float | None = None,
         delta: int | float | None = None,
         location: str | None = None,
-        state: str | None = None,
         name: str | None = None,
         unit: str | None = None,
         item_id: str | None = None,
@@ -419,16 +484,6 @@ class MiseEnPlaceAssistantInventory:
             )
         if location is not None:
             container["location"] = self.ensure_location(location)
-        if state is not None:
-            container["state"] = state
-        elif quantity_changed:
-            # A container that has just been consumed is physically empty and
-            # needs washing before it can return to clean storage.
-            container["state"] = (
-                CONTAINER_STATE_FILLED
-                if container["canonical_quantity"]
-                else CONTAINER_STATE_DIRTY
-            )
         if name is not None:
             container["name"] = self._normalize_optional(name) or self.default_container_name(tag_id)
         if item_id is not None:
@@ -448,36 +503,12 @@ class MiseEnPlaceAssistantInventory:
             async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "product", container["product_id"])
         self._add_log_entry(
             "Container updated",
-            f"{container['name']} changed from {before.get('state')} to {container.get('state')}.",
-            {"tag_id": tag_id, "old_quantity": before.get("quantity"), "quantity": container.get("quantity"), "old_state": before.get("state"), "state": container.get("state"),
+            f"{container['name']} inventory was updated.",
+            {"tag_id": tag_id, "old_quantity": before.get("quantity"), "quantity": container.get("quantity"),
              "product": self.product_snapshot(container)},
         )
         await self.async_save()
 
-    async def async_mark_container_clean(self, tag_id: str, *, location: str | None = None) -> None:
-        """Record the post-wash NFC scan; the container no longer has contents."""
-        tag_id = self._normalize_tag_id(tag_id)
-        if tag_id not in self.containers:
-            raise KeyError(tag_id)
-        container = self.containers[tag_id]
-        previous_product = self.product_snapshot(container)
-        if location is not None:
-            container["location"] = self.ensure_location(location)
-        container.update({
-            "item_id": None,
-            "item_label": None,
-            "item_format": None,
-            "product_id": None,
-            **normalize_quantity(0, container.get("display_unit", container.get("unit", DEFAULT_UNIT))),
-            "state": CONTAINER_STATE_CLEAN,
-            "updated_at": _utc_now(),
-        })
-        self._add_log_entry(
-            "Container washed",
-            f"{container['name']} was scanned clean and is ready for storage.",
-            {"tag_id": tag_id, "previous_item": (previous_product or {}).get("label"), "previous_product": previous_product, "location": container.get("location")},
-        )
-        await self.async_save()
 
     async def async_scan_container(self, *, tag_id: str, quantity: int | float | None = None, mode: str = "set") -> None:
         delta = float(quantity) if quantity is not None and mode == "add" else None
@@ -527,18 +558,47 @@ class MiseEnPlaceAssistantInventory:
                 total["quantity"] = None
         return totals
 
-    def _resolve_product_id(self, item_id: str | None, label: str | None, item_format: str | None, unit: str | None, source_provider: str = "local") -> str | None:
+    def meal_inventory(self) -> dict[str, Any]:
+        """Sum ready meals by Mealie's configured yield unit."""
+        components: dict[str, dict[str, Any]] = {}
+        for container in self.containers.values():
+            if container.get("content_kind") != "meal":
+                continue
+            amount = float(container.get("canonical_quantity", container.get("quantity", 0)))
+            unit = container.get("canonical_unit", container.get("unit")) or DEFAULT_UNIT
+            if amount <= 0:
+                continue
+            product = self.product_for_container(container) or {}
+            classification = product.get("classification") or {}
+            component = classification.get("component")
+            if not component:
+                continue
+            entry = components.setdefault(component, {"component": component, "quantities": {}, "proteins": {}, "recipes": {}})
+            entry["quantities"][unit] = entry["quantities"].get(unit, 0) + amount
+            protein = classification.get("primary_protein")
+            if protein:
+                protein_totals = entry["proteins"].setdefault(protein, {})
+                protein_totals[unit] = protein_totals.get(unit, 0) + amount
+            label = product.get("label") or container.get("item_label") or "Unknown recipe"
+            recipe_totals = entry["recipes"].setdefault(label, {})
+            recipe_totals[unit] = recipe_totals.get(unit, 0) + amount
+        return {"components": sorted(components.values(), key=lambda entry: entry["component"])}
+
+    def _resolve_product_id(self, item_id: str | None, label: str | None, item_format: str | None,
+                            unit: str | None, source_provider: str = "local",
+                            classification: dict[str, str] | None = None) -> str | None:
         """Find or create the local product record for supplied catalog data."""
         if not item_id and not label:
             return None
         product_id, _ = self._ensure_product(
             item_id, label, item_format, unit,
-            source_provider=source_provider if item_id else "local",
+            source_provider=source_provider if item_id else "local", classification=classification,
         )
         return product_id
 
     def _ensure_product(self, source_id: str | None, label: str | None, item_format: str | None,
-                        unit: str | None, *, source_provider: str, legacy_key: str | None = None) -> tuple[str, bool]:
+                        unit: str | None, *, source_provider: str, legacy_key: str | None = None,
+                        classification: dict[str, str] | None = None) -> tuple[str, bool]:
         """Upsert catalog presentation without changing the product's local identity."""
         product_id = self._find_product(source_id, source_provider, label)
         if not product_id:
@@ -552,6 +612,7 @@ class MiseEnPlaceAssistantInventory:
             "format": item_format if item_format is not None else current.get("format"),
             "unit": unit or current.get("unit") or DEFAULT_UNIT,
             "source": source,
+            "classification": classification if classification is not None else current.get("classification", {}),
             "status": current.get("status", "active"),
             "created_at": current.get("created_at", _utc_now()),
             "updated_at": _utc_now(),

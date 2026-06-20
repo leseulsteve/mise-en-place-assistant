@@ -153,17 +153,12 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
     empty_containers = [
         _container_summary(container, manager)
         for container in containers
-        if container.get("state") == "empty"
+        if float(container.get("canonical_quantity", container.get("quantity", 0))) == 0
     ]
     low_containers = [
         _container_summary(container, manager)
         for container in containers
         if 0 < float(container.get("quantity", 0)) <= 2
-    ]
-    dirty_containers = [
-        _container_summary(container, manager)
-        for container in containers
-        if container.get("state") == "dirty"
     ]
     item_totals = sorted(
         manager.item_totals(include_empty=False).values(), key=lambda item: item["label"].casefold()
@@ -175,16 +170,16 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
             "locations": len(manager.locations),
             "items": len(item_totals),
             "empty": len(empty_containers),
-            "dirty": len(dirty_containers),
             "low": len(low_containers),
         },
         "containers": [_container_summary(container, manager) for container in containers],
         "items": item_totals,
         "foods": manager.catalog_items(),
+        "recipes": manager.recipe_items(),
+        "meal_inventory": manager.meal_inventory(),
         "locations": locations,
         "empty_containers": empty_containers[:8],
         "low_containers": low_containers[:8],
-        "dirty_containers": dirty_containers[:8],
         "logbook": list(reversed(manager.logbook[-50:])),
     }
 
@@ -202,7 +197,7 @@ def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantI
         "canonical_quantity": container.get("canonical_quantity", container.get("quantity", 0)),
         "canonical_unit": container.get("canonical_unit", container.get("unit")) or "items",
         "location": container.get("location") or "Unassigned",
-        "state": container.get("state") or "unknown",
+        "content_kind": container.get("content_kind") or "empty",
         "updated_at": container.get("updated_at") or "",
         "created_at": container.get("created_at") or "",
     }

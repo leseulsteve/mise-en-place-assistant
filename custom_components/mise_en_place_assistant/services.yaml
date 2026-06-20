@@ -24,18 +24,6 @@ create_container:
     location:
       selector:
         text:
-    state:
-      default: unknown
-      selector:
-        select:
-          options:
-            - unknown
-            - filled
-            - empty
-            - dirty
-            - clean
-            - stored
-          custom_value: true
     item_id:
       required: true
       selector:
@@ -64,17 +52,6 @@ update_container:
     location:
       selector:
         text:
-    state:
-      selector:
-        select:
-          options:
-            - unknown
-            - filled
-            - empty
-            - dirty
-            - clean
-            - stored
-          custom_value: true
     unit:
       selector:
         text:
@@ -85,6 +62,34 @@ update_container:
       selector:
         text:
     item_format:
+      selector:
+        text:
+
+create_recipe_container:
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+    recipe_id:
+      required: true
+      selector:
+        text:
+    content_kind:
+      required: true
+      selector:
+        select:
+          options:
+            - recipe
+            - meal
+    quantity:
+      default: 0
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
+    location:
       selector:
         text:
 

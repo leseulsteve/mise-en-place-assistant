@@ -1,30 +1,30 @@
 substitutions:
   device_name: m5dial-mise-en-place-assistant
   friendly_name: "M5 Dial Mise en Place Assistant"
+  # Change this to the room containing the Dial before enabling presence.
+  espresense_room: kitchen
+  espresense_device_name: "Android watch"
 
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
+  platformio_options:
+    board_build.flash_mode: dio
 
   on_boot:
     priority: -100
     then:
-      - output.turn_on: power_hold
+      - pcf8563.read_time: dial_rtc
       - light.turn_on:
           id: backlight
           brightness: 80%
       - script.execute: show_page
-      - if:
-          condition:
-            lambda: 'return id(ble_connectivity_enabled);'
-          then:
-            - ble.enable:
-            - delay: 500ms
-            - esp32_ble_tracker.start_scan:
-                continuous: true
+      - script.execute: screensaver_timeout
+      - script.execute: start_ble_scanning
 
 esp32:
-  board: esp32s3box
+  variant: esp32s3
+  flash_size: 8MB
   framework:
     type: esp-idf
 
@@ -77,7 +77,6 @@ api:
         quantity: float
         unit: string
         location: string
-        state: string
         incoming_locations: string[]
       then:
         - lambda: |-
@@ -90,7 +89,6 @@ api:
               id(selected_item_format) = item_format;
               id(selected_item_unit) = unit;
               id(selected_location_label) = location;
-              id(selected_state) = state;
               id(locations) = incoming_locations;
               id(selected_location_index) = 0;
               for (int i = 0; i < (int) id(locations).size(); i++) {
@@ -101,40 +99,7 @@ api:
               }
               id(inventory_qty) = quantity;
               id(current_view) = 20;
-              ESP_LOGI("mise_en_place_assistant", "Known flow loaded: tag=%s item=%s quantity=%d location=%s choices=%d", tag_id.c_str(), item_label.c_str(), quantity, location.c_str(), (int) incoming_locations.size());
-            }
-        - if:
-            condition:
-              lambda: 'return id(ha_response_accepted);'
-            then:
-              - script.stop: scan_timeout
-              - script.execute: show_page
-
-    - action: show_clean_container
-      variables:
-        tag_id: string
-        container_name: string
-        location: string
-        incoming_locations: string[]
-      then:
-        - lambda: |-
-            id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id;
-            if (!id(ha_response_accepted)) {
-              ESP_LOGW("mise_en_place_assistant", "Ignoring stale clean-container response: tag=%s view=%d", tag_id.c_str(), id(current_view));
-            } else {
-              id(last_tag_id) = tag_id;
-              id(selected_item_label) = container_name;
-              id(selected_location_label) = location;
-              id(locations) = incoming_locations;
-              id(selected_location_index) = 0;
-              for (int i = 0; i < (int) id(locations).size(); i++) {
-                if (id(locations)[i] == location) {
-                  id(selected_location_index) = i;
-                  break;
-                }
-              }
-              id(current_view) = 22;
-              ESP_LOGI("mise_en_place_assistant", "Clean confirmation loaded: tag=%s container=%s", tag_id.c_str(), container_name.c_str());
+              ESP_LOGI("mise_en_place_assistant", "Known flow loaded: tag=%s item=%s quantity=%g location=%s choices=%d", tag_id.c_str(), item_label.c_str(), quantity, location.c_str(), (int) incoming_locations.size());
             }
         - if:
             condition:
@@ -174,6 +139,17 @@ api:
               - script.stop: operation_timeout
               - script.execute: show_page
 
+    - action: set_theme
+      variables:
+        theme: string
+      then:
+        - lambda: |-
+            if (theme != "yoshoku_pantry") {
+              ESP_LOGW("mise_en_place_assistant", "Ignoring unsupported Dial theme: %s", theme.c_str());
+            } else {
+              id(selected_theme) = theme;
+            }
+
 ota:
   - platform: esphome
     password: !secret ota_password
@@ -190,6 +166,23 @@ wifi:
 
 captive_portal:
 
+time:
+  - platform: pcf8563
+    id: dial_rtc
+    i2c_id: bus_internal
+    address: 0x51
+    update_interval: never
+
+  - platform: homeassistant
+    id: ha_time
+    on_time_sync:
+      then:
+        - pcf8563.write_time: dial_rtc
+    on_time:
+      - seconds: /1
+        then:
+          - script.execute: refresh_clock
+
 # ─────────────────────────────
 # BLUETOOTH / HOME ASSISTANT DEVICE MANAGEMENT
 # ─────────────────────────────
@@ -199,9 +192,8 @@ captive_portal:
 # Assistant device instead of becoming an entity of the Dial.
 #
 # Keep the tracker defaults: ESPHome recommends them for Wi-Fi proxies. The
-# Home Assistant BLE connectivity switch disables the complete BLE radio when
-# it is not needed; this reduces radio activity and energy use, but does not
-# reduce the firmware's compile-time BLE footprint.
+# The Home Assistant BLE switch, iBeacon discovery, and ESPresense presence
+# share one radio policy: the radio is disabled only when all three are off.
 esp32_ble:
   id: ble_radio
   enable_on_boot: false
@@ -211,10 +203,58 @@ esp32_ble_tracker:
     # Scanning is started at boot and controlled by the Home Assistant switch.
     continuous: false
 
+  # Discovery is opt-in and handles only fully parsed iBeacons. Once enrolled,
+  # the same callback publishes only the chosen beacon in ESPresense's room
+  # topic shape; other nearby Bluetooth devices are ignored.
+  on_ble_advertise:
+    - then:
+        - lambda: |-
+            id(espresense_report_ready) = false;
+            auto beacon = x.get_ibeacon();
+            if (!beacon.has_value()) {
+              return;
+            }
+            char uuid[37];
+            const auto beacon_id = std::string(beacon->get_uuid().to_str(uuid)) + "-" + std::to_string(beacon->get_major()) + "-" + std::to_string(beacon->get_minor());
+            if (id(espresense_discovery_enabled) && id(last_discovered_ibeacon) != beacon_id) {
+              id(last_discovered_ibeacon) = beacon_id;
+              ESP_LOGI("espresense", "Discovered iBeacon: %s", beacon_id.c_str());
+            }
+            if (!id(espresense_presence_enabled) || id(tracked_ibeacon_id) != beacon_id) {
+              return;
+            }
+            const uint32_t now = millis();
+            if (now - id(last_espresense_publish_ms) < 3000) {
+              return;
+            }
+            id(last_espresense_publish_ms) = now;
+            id(espresense_rssi) = x.get_rssi();
+            id(espresense_distance) = powf(10.0f, (beacon->get_signal_power() - id(espresense_rssi)) / 20.0f);
+            id(espresense_watch_rssi).publish_state(id(espresense_rssi));
+            id(espresense_watch_distance).publish_state(id(espresense_distance));
+            id(espresense_watch_present).publish_state(true);
+            id(espresense_report_ready) = true;
+        - if:
+            condition:
+              lambda: 'return id(espresense_report_ready);'
+            then:
+              - script.execute: publish_espresense_presence
+              - script.execute: publish_watch_tracker_home
+              - script.execute: espresense_presence_timeout
+
 bluetooth_proxy:
   active: true
   cache_services: true
   connection_slots: 3
+
+mqtt:
+  id: mqtt_client
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  topic_prefix: null
+  on_connect:
+    - script.execute: publish_watch_tracker_discovery
 
 switch:
   - platform: template
@@ -224,19 +264,67 @@ switch:
     lambda: 'return id(ble_connectivity_enabled);'
     turn_on_action:
       - lambda: 'id(ble_connectivity_enabled) = true;'
-      - ble.enable:
-      - delay: 500ms
-      - esp32_ble_tracker.start_scan:
-          continuous: true
+      - script.execute: start_ble_scanning
       - switch.template.publish:
           id: ble_connectivity
           state: ON
     turn_off_action:
-      - esp32_ble_tracker.stop_scan:
-      - ble.disable:
       - lambda: 'id(ble_connectivity_enabled) = false;'
+      - script.execute: stop_ble_if_unused
       - switch.template.publish:
           id: ble_connectivity
+          state: OFF
+
+  - platform: template
+    id: espresense_presence
+    name: "ESPresense presence"
+    icon: mdi:bluetooth-connect
+    entity_category: config
+    lambda: 'return id(espresense_presence_enabled);'
+    turn_on_action:
+      - lambda: |-
+          id(espresense_presence_enabled) = true;
+          if (id(tracked_ibeacon_id).empty()) {
+            ESP_LOGW("espresense", "Presence is enabled, but no iBeacon has been enrolled yet");
+          }
+      - script.execute: start_ble_scanning
+      - switch.template.publish:
+          id: espresense_presence
+          state: ON
+    turn_off_action:
+      - lambda: |-
+          id(espresense_presence_enabled) = false;
+          id(espresense_watch_present).publish_state(false);
+      - script.stop: espresense_presence_timeout
+      - script.execute: publish_watch_tracker_not_home
+      - script.execute: stop_ble_if_unused
+      - switch.template.publish:
+          id: espresense_presence
+          state: OFF
+
+  - platform: template
+    id: espresense_discovery
+    name: "Discover BLE beacons"
+    icon: mdi:bluetooth-searching
+    entity_category: diagnostic
+    lambda: 'return id(espresense_discovery_enabled);'
+    turn_on_action:
+      - lambda: |-
+          id(espresense_discovery_enabled) = true;
+          id(last_discovered_ibeacon).clear();
+          ESP_LOGI("espresense", "iBeacon discovery enabled; bring the watch close to the Dial");
+      - script.execute: start_ble_scanning
+      - switch.template.publish:
+          id: espresense_discovery
+          state: ON
+    turn_off_action:
+      - lambda: |-
+          id(espresense_discovery_enabled) = false;
+          id(last_discovered_ibeacon).clear();
+          ESP_LOGI("espresense", "iBeacon discovery disabled");
+      - script.execute: stop_ble_if_unused
+      - switch.template.publish:
+          id: espresense_discovery
           state: OFF
 
 button:
@@ -246,15 +334,39 @@ button:
     on_press:
       - if:
           condition:
-            lambda: 'return id(ble_connectivity_enabled);'
+            lambda: 'return id(ble_connectivity_enabled) || id(espresense_discovery_enabled) || id(espresense_presence_enabled);'
           then:
             - esp32_ble_tracker.stop_scan:
             - ble.disable:
             - delay: 250ms
-            - ble.enable:
-            - delay: 500ms
-            - esp32_ble_tracker.start_scan:
-                continuous: true
+            - script.execute: start_ble_scanning
+
+  - platform: template
+    name: "Use discovered BLE beacon"
+    icon: mdi:bluetooth-transfer
+    entity_category: config
+    on_press:
+      - lambda: |-
+          if (id(last_discovered_ibeacon).empty()) {
+            ESP_LOGW("espresense", "No iBeacon has been discovered; enable discovery and bring the watch close");
+            return;
+          }
+          id(tracked_ibeacon_id) = id(last_discovered_ibeacon);
+          id(tracked_ibeacon_text).publish_state(id(tracked_ibeacon_id));
+          ESP_LOGI("espresense", "Enrolled iBeacon for presence: %s", id(tracked_ibeacon_id).c_str());
+
+  - platform: template
+    name: "Forget tracked BLE beacon"
+    icon: mdi:bluetooth-off
+    entity_category: config
+    on_press:
+      - lambda: |-
+          id(tracked_ibeacon_id).clear();
+          id(tracked_ibeacon_text).publish_state("Not enrolled");
+          id(espresense_watch_present).publish_state(false);
+          ESP_LOGI("espresense", "Forgot enrolled iBeacon");
+      - script.stop: espresense_presence_timeout
+      - script.execute: publish_watch_tracker_not_home
 
   - platform: template
     name: "Return Dial to idle"
@@ -281,8 +393,6 @@ i2c:
     scan: true
     frequency: 100kHz
 
-# The Dial's FT3267 touch controller uses ESPHome's FT5x06 driver at 0x38.
-# Touch is used only for safe, non-inventory navigation.
 touchscreen:
   - platform: ft5x06
     id: dial_touch
@@ -291,7 +401,7 @@ touchscreen:
     display: round_display
 
 display:
-  - platform: ili9xxx
+  - platform: mipi_spi
     model: GC9A01A
     id: round_display
     cs_pin: GPIO7
@@ -302,10 +412,6 @@ display:
     update_interval: never
 
 output:
-  - platform: gpio
-    id: power_hold
-    pin: GPIO46
-
   - platform: ledc
     id: buzzer_output
     pin: GPIO3
@@ -344,6 +450,12 @@ binary_sensor:
     device_class: connectivity
     entity_category: diagnostic
 
+  - platform: template
+    id: espresense_watch_present
+    name: "Android watch nearby"
+    device_class: presence
+    entity_category: diagnostic
+
   - platform: gpio
     id: dial_button
     pin:
@@ -365,6 +477,19 @@ binary_sensor:
         then:
           - script.execute: on_long_press
 
+  # GPIO46 is the Dial's physical Hold Button, not a power-hold output.
+  - platform: gpio
+    id: dial_hold_button
+    internal: true
+    pin:
+      number: GPIO46
+      mode: INPUT_PULLUP
+      inverted: true
+    filters:
+      - delayed_on_off: 10ms
+    on_press:
+      - script.execute: on_long_press
+
 sensor:
   - platform: wifi_signal
     id: wifi_rssi
@@ -376,6 +501,24 @@ sensor:
     name: "Uptime"
     entity_category: diagnostic
     update_interval: 60s
+
+  - platform: template
+    id: espresense_watch_rssi
+    name: "Android watch RSSI"
+    device_class: signal_strength
+    state_class: measurement
+    unit_of_measurement: dBm
+    entity_category: diagnostic
+    accuracy_decimals: 0
+
+  - platform: template
+    id: espresense_watch_distance
+    name: "Android watch distance"
+    device_class: distance
+    state_class: measurement
+    unit_of_measurement: m
+    entity_category: diagnostic
+    accuracy_decimals: 1
 
   - platform: rotary_encoder
     id: dial_encoder
@@ -411,6 +554,15 @@ rc522_i2c:
 
 text_sensor:
   - platform: template
+    id: tracked_ibeacon_text
+    name: "Tracked ESPresense beacon"
+    entity_category: diagnostic
+    update_interval: 15s
+    lambda: |-
+      if (id(tracked_ibeacon_id).empty()) return {"Not enrolled"};
+      return {id(tracked_ibeacon_id)};
+
+  - platform: template
     name: "Dial workflow"
     entity_category: diagnostic
     update_interval: 1s
@@ -418,14 +570,12 @@ text_sensor:
       switch (id(current_view)) {
         case 0: return {"Idle"};
         case 1: return {"Waiting for Home Assistant"};
-        case 2: return {"Choosing style"};
+        case 3: return {"Clock screensaver"};
         case 10: return {"Choosing item"};
         case 11: return {"Choosing quantity"};
         case 13: return {"Choosing location"};
         case 20: return {"Editing inventory"};
         case 21: return {"Moving container"};
-        case 22: return {"Confirming clean container"};
-        case 23: return {"Choosing clean storage"};
         case 29: return {"Saving"};
         case 30: return {"Saved"};
         case 31: return {"Home Assistant timeout"};
@@ -441,6 +591,43 @@ globals:
     type: bool
     restore_value: true
     initial_value: "true"
+
+  - id: espresense_discovery_enabled
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+  - id: espresense_presence_enabled
+    type: bool
+    restore_value: true
+    initial_value: "false"
+
+  - id: last_discovered_ibeacon
+    type: std::string
+    restore_value: false
+    initial_value: '""'
+
+  - id: tracked_ibeacon_id
+    type: std::string
+    restore_value: true
+    max_restore_data_length: 64
+    initial_value: '""'
+
+  - id: espresense_rssi
+    type: int
+    initial_value: "-127"
+
+  - id: espresense_distance
+    type: float
+    initial_value: "0.0"
+
+  - id: last_espresense_publish_ms
+    type: uint32_t
+    initial_value: "0"
+
+  - id: espresense_report_ready
+    type: bool
+    initial_value: "false"
 
   - id: current_view
     type: int
@@ -510,9 +697,10 @@ globals:
     type: std::string
     initial_value: '""'
 
-  - id: selected_state
+  - id: selected_theme
     type: std::string
-    initial_value: '"unknown"'
+    restore_value: true
+    initial_value: '"yoshoku_pantry"'
 
   - id: error_message
     type: std::string
@@ -523,6 +711,99 @@ globals:
 # ─────────────────────────────
 
 script:
+
+  - id: start_ble_scanning
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(ble_connectivity_enabled) || id(espresense_discovery_enabled) || id(espresense_presence_enabled);'
+          then:
+            - ble.enable:
+            - delay: 500ms
+            - esp32_ble_tracker.start_scan:
+                continuous: true
+
+  - id: stop_ble_if_unused
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(ble_connectivity_enabled) && !id(espresense_discovery_enabled) && !id(espresense_presence_enabled);'
+          then:
+            - esp32_ble_tracker.stop_scan:
+            - ble.disable:
+
+  - id: publish_espresense_presence
+    mode: single
+    then:
+      - if:
+          condition:
+            mqtt.connected:
+          then:
+            - mqtt.publish_json:
+                topic: !lambda 'return std::string("espresense/devices/iBeacon:") + id(tracked_ibeacon_id) + "/${espresense_room}";'
+                payload: |-
+                  root["id"] = std::string("iBeacon:") + id(tracked_ibeacon_id);
+                  root["name"] = "${espresense_device_name}";
+                  root["distance"] = id(espresense_distance);
+                  root["rssi"] = id(espresense_rssi);
+                qos: 0
+                retain: false
+
+  # This direct tracker is intentionally separate from the ESPresense room
+  # topic above: it gives Home Assistant useful watch presence immediately,
+  # even before mqtt_room or an ESPresense fleet has been configured.
+  - id: publish_watch_tracker_discovery
+    mode: single
+    then:
+      - if:
+          condition:
+            mqtt.connected:
+          then:
+            - mqtt.publish_json:
+                topic: "homeassistant/device_tracker/${device_name}_android_watch/config"
+                payload: |-
+                  root["name"] = "Android watch via M5 Dial";
+                  root["unique_id"] = "${device_name}_android_watch_presence";
+                  root["state_topic"] = "mise_en_place_assistant/${device_name}/android_watch/state";
+                  root["payload_home"] = "home";
+                  root["payload_not_home"] = "not_home";
+                  root["source_type"] = "bluetooth_le";
+                retain: true
+
+  - id: publish_watch_tracker_home
+    mode: restart
+    then:
+      - if:
+          condition:
+            mqtt.connected:
+          then:
+            - mqtt.publish:
+                topic: "mise_en_place_assistant/${device_name}/android_watch/state"
+                payload: "home"
+                retain: true
+
+  - id: publish_watch_tracker_not_home
+    mode: restart
+    then:
+      - if:
+          condition:
+            mqtt.connected:
+          then:
+            - mqtt.publish:
+                topic: "mise_en_place_assistant/${device_name}/android_watch/state"
+                payload: "not_home"
+                retain: true
+
+  - id: espresense_presence_timeout
+    mode: restart
+    then:
+      - delay: 30s
+      - binary_sensor.template.publish:
+          id: espresense_watch_present
+          state: OFF
+      - script.execute: publish_watch_tracker_not_home
 
   # The Dial has a piezo buzzer rather than a full speaker. Keep its voice
   # deliberately small: rising notes mean progress, low notes mean attention.
@@ -542,24 +823,6 @@ script:
     then:
       - rtttl.play: "attention:d=16,o=5,b=120:8c5,8g4"
 
-  - id: show_style_picker
-    then:
-      - lambda: 'id(current_view) = 2;'
-      - script.execute: sound_advance
-      - lvgl.page.show:
-          id: page_style_picker
-          animation: MOVE_LEFT
-          time: 180ms
-
-  - id: close_style_picker
-    then:
-      - lambda: 'id(current_view) = 0;'
-      - script.execute: sound_advance
-      - lvgl.page.show:
-          id: page_idle
-          animation: MOVE_RIGHT
-          time: 180ms
-
   - id: cancel_flow
     then:
       - script.stop: scan_timeout
@@ -570,6 +833,48 @@ script:
           id(last_tag_id).clear();
           id(current_view) = 0;
       - script.execute: show_page
+      - script.execute: screensaver_timeout
+
+  - id: wake_display
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 3;'
+          then:
+            - lambda: 'id(current_view) = 0;'
+            - script.execute: show_page
+      - script.execute: screensaver_timeout
+
+  - id: screensaver_timeout
+    mode: restart
+    then:
+      - delay: 45s
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 0;'
+          then:
+            - lambda: 'id(current_view) = 3;'
+            - script.execute: show_page
+
+  - id: refresh_clock
+    then:
+      - lvgl.label.update:
+          id: lbl_clock_time
+          text: !lambda |-
+            auto now = id(ha_time).now();
+            if (!now.is_valid()) return std::string("--:--");
+            char value[6];
+            now.strftime(value, sizeof(value), "%H:%M");
+            return std::string(value);
+      - lvgl.label.update:
+          id: lbl_clock_date
+          text: !lambda |-
+            auto now = id(ha_time).now();
+            if (!now.is_valid()) return std::string("Waiting for time");
+            char value[20];
+            now.strftime(value, sizeof(value), "%a  %d %b");
+            return std::string(value);
 
   - id: show_page
     then:
@@ -589,9 +894,9 @@ script:
 
       - if:
           condition:
-            lambda: 'return id(current_view) == 2;'
+            lambda: 'return id(current_view) == 3;'
           then:
-            - lvgl.page.show: page_style_picker
+            - lvgl.page.show: page_clock
 
       - if:
           condition:
@@ -622,18 +927,6 @@ script:
             lambda: 'return id(current_view) == 21;'
           then:
             - lvgl.page.show: page_known_location
-
-      - if:
-          condition:
-            lambda: 'return id(current_view) == 22;'
-          then:
-            - lvgl.page.show: page_clean
-
-      - if:
-          condition:
-            lambda: 'return id(current_view) == 23;'
-          then:
-            - lvgl.page.show: page_clean_location
 
       - if:
           condition:
@@ -686,12 +979,13 @@ script:
 
   - id: encoder_up
     then:
+      - script.execute: wake_display
       - lambda: |-
           if (id(current_view) == 10 && !id(item_labels).empty()) {
             id(selected_item_index) = (id(selected_item_index) + 1) % id(item_labels).size();
           } else if (id(current_view) == 11 || id(current_view) == 20) {
             id(inventory_qty)++;
-          } else if ((id(current_view) == 13 || id(current_view) == 21 || id(current_view) == 23) && !id(locations).empty()) {
+          } else if ((id(current_view) == 13 || id(current_view) == 21) && !id(locations).empty()) {
             id(selected_location_index) = (id(selected_location_index) + 1) % id(locations).size();
           }
           ESP_LOGD("mise_en_place_assistant", "Encoder up: view=%d item_index=%d location_index=%d qty=%g", id(current_view), id(selected_item_index), id(selected_location_index), id(inventory_qty));
@@ -700,13 +994,14 @@ script:
 
   - id: encoder_down
     then:
+      - script.execute: wake_display
       - lambda: |-
           if (id(current_view) == 10 && !id(item_labels).empty()) {
             int size = id(item_labels).size();
             id(selected_item_index) = (id(selected_item_index) + size - 1) % size;
           } else if ((id(current_view) == 11 || id(current_view) == 20) && id(inventory_qty) > 0) {
             id(inventory_qty)--;
-          } else if ((id(current_view) == 13 || id(current_view) == 21 || id(current_view) == 23) && !id(locations).empty()) {
+          } else if ((id(current_view) == 13 || id(current_view) == 21) && !id(locations).empty()) {
             int size = id(locations).size();
             id(selected_location_index) = (id(selected_location_index) + size - 1) % size;
           }
@@ -716,6 +1011,7 @@ script:
 
   - id: on_short_press
     then:
+      - script.execute: wake_display
       - lambda: 'id(press_view) = id(current_view);'
       - lambda: |-
           ESP_LOGD("mise_en_place_assistant", "Button short press: view=%d tag=%s", id(press_view), id(last_tag_id).c_str());
@@ -758,7 +1054,6 @@ script:
                   unit: !lambda 'return id(selected_item_unit);'
                   quantity: !lambda 'return std::to_string(id(inventory_qty));'
                   location: !lambda 'return id(selected_location_label);'
-                  state: "unknown"
                   source: "${device_name}"
 
       - if:
@@ -790,41 +1085,11 @@ script:
 
       - if:
           condition:
-            lambda: 'return id(press_view) == 22 && !id(last_tag_id).empty();'
-          then:
-            - lambda: 'id(current_view) = 23;'
-            - script.execute: sound_advance
-            - script.execute: show_page
-
-      - if:
-          condition:
-            lambda: 'return id(press_view) == 23 && !id(last_tag_id).empty();'
-          then:
-            - lambda: |-
-                ESP_LOGI("mise_en_place_assistant", "Container marked clean: tag=%s", id(last_tag_id).c_str());
-            - lambda: 'id(current_view) = 29;'
-            - script.execute: show_page
-            - script.execute: operation_timeout
-            - homeassistant.event:
-                event: esphome.mise_en_place_assistant_mark_clean
-                data:
-                  tag_id: !lambda 'return id(last_tag_id);'
-                  location: !lambda 'return id(selected_location_label);'
-                  source: "${device_name}"
-
-      - if:
-          condition:
             lambda: 'return id(press_view) == 30 || id(press_view) == 31;'
           then:
             - lambda: 'id(current_view) = 0;'
             - script.execute: sound_advance
             - script.execute: show_page
-
-      - if:
-          condition:
-            lambda: 'return id(press_view) == 2;'
-          then:
-            - script.execute: close_style_picker
 
   - id: on_long_press
     then:
@@ -833,6 +1098,7 @@ script:
 
   - id: on_nfc
     then:
+      - script.execute: wake_display
       - rtttl.play: "tag:d=32,o=6,b=180:16g6"
       - lambda: |-
           ESP_LOGI("mise_en_place_assistant", "NFC tag scanned: %s", id(last_tag_id).c_str());
@@ -908,30 +1174,24 @@ script:
           id: lbl_known_location_select
           text: !lambda 'return id(selected_location_label);'
       - lvgl.label.update:
-          id: lbl_clean_name
-          text: !lambda 'return id(selected_item_label);'
-      - lvgl.label.update:
-          id: lbl_clean_location
-          text: !lambda 'return id(selected_location_label);'
-      - lvgl.label.update:
           id: lbl_error_message
           text: !lambda 'return id(error_message);'
+      - script.execute: refresh_clock
 
 # ─────────────────────────────
-# LVGL — a quiet, warm pantry palette. Colour always accompanies plain text so
-# success and failure remain understandable on a dim screen or without sound.
+# LVGL — a simple black background keeps the display uncluttered.
 # ─────────────────────────────
 lvgl:
   displays:
     - round_display
   touchscreens:
     - touchscreen_id: dial_touch
-  bg_color: 0x17131A
+  bg_color: 0x000000
 
   pages:
 
     - id: page_idle
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: CENTER
@@ -953,43 +1213,32 @@ lvgl:
             y: 48
             text: "A little kitchen magic"
             text_color: 0x655C66
-        - obj:
-            width: 100%
-            height: 100%
-            align: CENTER
-            bg_opa: TRANSP
-            border_width: 0
-            clickable: true
-            on_swipe_left:
-              - script.execute: show_style_picker
 
-    - id: page_style_picker
-      bg_color: 0x17131A
+    - id: page_clock
+      bg_color: 0x000000
       widgets:
         - label:
             align: CENTER
-            y: -56
-            text: "STYLE CABINET"
+            y: -22
+            text: "KITCHEN TIME"
             text_color: 0xC6B4E9
         - label:
+            id: lbl_clock_time
             align: CENTER
-            y: -20
-            text: "YOSHOKU PANTRY"
+            y: 10
+            text: "--:--"
+            text_font: montserrat_48
             text_color: 0xFFF8EA
         - label:
+            id: lbl_clock_date
             align: CENTER
-            y: 12
-            text: "Warm ink  Cream  Matcha"
+            y: 46
+            text: "Waiting for time"
             text_color: 0x91C788
         - label:
-            align: CENTER
-            y: 42
-            text: "ACTIVE - press to keep"
-            text_color: 0xB8AEB8
-        - label:
             align: BOTTOM_MID
-            y: -16
-            text: "Swipe right to return"
+            y: -18
+            text: "Turn, press, or scan to wake"
             text_color: 0x655C66
         - obj:
             width: 100%
@@ -999,12 +1248,13 @@ lvgl:
             border_width: 0
             clickable: true
             on_click:
-              - script.execute: close_style_picker
+              - script.execute: wake_display
+            on_swipe_left:
+              - script.execute: wake_display
             on_swipe_right:
-              - script.execute: close_style_picker
-
+              - script.execute: wake_display
     - id: page_loading
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: CENTER
@@ -1023,7 +1273,7 @@ lvgl:
             text_color: 0xB8AEB8
 
     - id: page_create_item
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: TOP_MID
@@ -1055,7 +1305,7 @@ lvgl:
             text_color: 0x655C66
 
     - id: page_create_qty
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: TOP_MID
@@ -1081,7 +1331,7 @@ lvgl:
             text_color: 0x655C66
 
     - id: page_create_location
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: TOP_MID
@@ -1106,7 +1356,7 @@ lvgl:
             text_color: 0x655C66
 
     - id: page_known
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: TOP_MID
@@ -1144,7 +1394,7 @@ lvgl:
             text_color: 0x655C66
 
     - id: page_known_location
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: TOP_MID
@@ -1168,58 +1418,8 @@ lvgl:
             text: "Turn to choose a home"
             text_color: 0x655C66
 
-    - id: page_clean
-      bg_color: 0x17131A
-      widgets:
-        - label:
-            align: TOP_MID
-            y: 22
-            text: "Washed container"
-            text_color: 0xC6B4E9
-        - label:
-            id: lbl_clean_name
-            align: CENTER
-            y: -14
-            text: ""
-            text_color: 0xFFF8EA
-        - label:
-            align: CENTER
-            y: 30
-            text: "Ready for its next home"
-            text_color: 0x91C788
-        - label:
-            align: BOTTOM_MID
-            y: -24
-            text: "Press to choose storage"
-            text_color: 0x655C66
-
-    - id: page_clean_location
-      bg_color: 0x17131A
-      widgets:
-        - label:
-            align: TOP_MID
-            y: 22
-            text: "Store container"
-            text_color: 0xC6B4E9
-        - label:
-            id: lbl_clean_location
-            align: CENTER
-            y: -12
-            text: ""
-            text_color: 0xFFF8EA
-        - label:
-            align: CENTER
-            y: 32
-            text: "Press to save"
-            text_color: 0x91C788
-        - label:
-            align: BOTTOM_MID
-            y: -24
-            text: "Turn to choose a home"
-            text_color: 0x655C66
-
     - id: page_done
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: CENTER
@@ -1238,7 +1438,7 @@ lvgl:
             text_color: 0xB8AEB8
 
     - id: page_saving
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: CENTER
@@ -1257,7 +1457,7 @@ lvgl:
             text_color: 0xB8AEB8
 
     - id: page_error
-      bg_color: 0x17131A
+      bg_color: 0x000000
       widgets:
         - label:
             align: CENTER
