@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.15 - 2026-06-20
+
+- Move Storage to a location/sublocation master-detail layout and seed mocked demo containers into shelves and bins, because every container living in Main was not a floor plan.
+
 ## 0.0.14 - 2026-06-20
 
 - Restructure the Storage tab around location-first cards with contextual container actions, neutral styling, selected-location facts, sublocation grouping, and icon-driven move/add workflows.
