@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.13 - 2026-06-20
+
+- Rework the Home Assistant panel around location-first storage cards, add DEV CRUD simulation, and tighten M5Dial/provider configuration paths, because inventory UX should not feel like a spreadsheet wearing a trench coat.
+
 ## 0.0.12 - 2026-06-20
 
 - Add explainable next actions, storage-attention context, publish-safe mock validation, and stricter M5Dial save guards so stale requests, bad quantities, and invalid locations cannot mutate inventory.
