@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.7 - 2026-06-20
+
+- Add Mealie recipe inventory, Pint-backed units, and M5Dial BLE presence controls, because stale state should not get pantry privileges.
+
 ## 0.0.6 - 2026-06-19
 
 - Add selectable Mocked/Mealie food catalogs, catalog-backed writes, and verified Dial save acknowledgements—because celebrating a Saved event before Home Assistant saved anything was apparently performance art.
