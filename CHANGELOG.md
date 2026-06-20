@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.16 - 2026-06-20
+
+- Simplify Storage location cards by moving type icons into chips and removing leftover selected, expand, count, and add-container chrome.
+
 ## 0.0.15 - 2026-06-20
 
 - Move Storage to a location/sublocation master-detail layout and seed mocked demo containers into shelves and bins, because every container living in Main was not a floor plan.
