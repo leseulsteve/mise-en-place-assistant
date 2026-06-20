@@ -17,6 +17,8 @@ from .units import normalized_inventory_unit
 
 _LOGGER = logging.getLogger(__name__)
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
+_GROCY_PRODUCT_EXTRA_KEY = "mise_en_place_grocy_product_id"
+_SYNC_SOURCE_EXTRA_KEY = "mise_en_place_source"
 
 
 class MealieCatalogError(Exception):
@@ -81,6 +83,7 @@ class MealieCatalogClient:
                     "label": label,
                     "format": str(food.get("description") or "").strip(),
                     "unit": self._food_default_unit(food, unit_lookup),
+                    "provider": "mealie",
                 }
             )
         if not foods:
@@ -136,9 +139,69 @@ class MealieCatalogClient:
                     "unit": self._recipe_yield_unit(recipe),
                     "tags": tags,
                     "categories": categories,
+                    "provider": "mealie_recipe",
                 }
             )
         return recipes
+
+    async def async_sync_grocy_products(self, products: Iterable[dict[str, Any]]) -> dict[str, int]:
+        """Create or update Mealie Foods from Grocy products without claiming manual foods.
+
+        Existing Mealie foods with our Grocy marker are updated. Existing foods
+        with the same name but no marker are left alone because they already
+        appear in Mealie and may be curated by the household.
+        """
+        if not self._token:
+            raise MealieCatalogError("Mealie API token is missing")
+        try:
+            foods_payload = await self._async_get_all("foods")
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            raise MealieCatalogError("Mealie food catalog is unavailable") from err
+        foods = self._records(foods_payload)
+        if not isinstance(foods, list):
+            raise MealieCatalogError("Mealie returned an invalid food catalog")
+
+        by_grocy_id: dict[str, dict[str, Any]] = {}
+        by_name: dict[str, dict[str, Any]] = {}
+        for food in foods:
+            if not isinstance(food, dict):
+                continue
+            name = str(food.get("name") or food.get("label") or "").strip()
+            if name:
+                by_name.setdefault(name.casefold(), food)
+            extras = food.get("extras")
+            if isinstance(extras, dict):
+                grocy_id = str(extras.get(_GROCY_PRODUCT_EXTRA_KEY) or "").strip()
+                if grocy_id:
+                    by_grocy_id[grocy_id] = food
+
+        result = {"created": 0, "updated": 0, "skipped": 0}
+        for product in products:
+            grocy_id = str(product.get("id") or "").strip()
+            name = str(product.get("label") or "").strip()
+            if not grocy_id or not name:
+                result["skipped"] += 1
+                continue
+            description = str(product.get("format") or "").strip()
+            existing = by_grocy_id.get(grocy_id)
+            if existing:
+                food_id = str(existing.get("id") or "").strip()
+                if not food_id:
+                    result["skipped"] += 1
+                    continue
+                payload = self._grocy_food_payload(name, description, grocy_id, existing.get("extras"))
+                if self._food_needs_update(existing, payload):
+                    await self._async_put(f"foods/{food_id}", payload)
+                    result["updated"] += 1
+                else:
+                    result["skipped"] += 1
+                continue
+            if name.casefold() in by_name:
+                result["skipped"] += 1
+                continue
+            await self._async_post("foods", self._grocy_food_payload(name, description, grocy_id, None))
+            result["created"] += 1
+        return result
 
     @staticmethod
     def _recipe_yield_unit(recipe: dict[str, Any]) -> str:
@@ -165,6 +228,38 @@ class MealieCatalogClient:
         ) as response:
             response.raise_for_status()
             return await response.json(content_type=None)
+
+    async def _async_post(self, resource: str, payload: dict[str, Any]) -> Any:
+        """Create one Mealie resource with a bounded timeout."""
+        try:
+            async with self._session.post(
+                f"{self._base_url}/api/{resource}",
+                headers={"Authorization": f"Bearer {self._token}"},
+                json=payload,
+                timeout=_REQUEST_TIMEOUT,
+            ) as response:
+                response.raise_for_status()
+                if response.status == 204:
+                    return {}
+                return await response.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            raise MealieCatalogError("Mealie food sync is unavailable") from err
+
+    async def _async_put(self, resource: str, payload: dict[str, Any]) -> Any:
+        """Update one Mealie resource with a bounded timeout."""
+        try:
+            async with self._session.put(
+                f"{self._base_url}/api/{resource}",
+                headers={"Authorization": f"Bearer {self._token}"},
+                json=payload,
+                timeout=_REQUEST_TIMEOUT,
+            ) as response:
+                response.raise_for_status()
+                if response.status == 204:
+                    return {}
+                return await response.json(content_type=None)
+        except (aiohttp.ClientError, TimeoutError, ValueError) as err:
+            raise MealieCatalogError("Mealie food sync is unavailable") from err
 
     @staticmethod
     def _records(payload: Any) -> Any:
@@ -213,3 +308,25 @@ class MealieCatalogClient:
             if unit := normalized_inventory_unit(value):
                 return unit
         return "items"
+
+    @staticmethod
+    def _grocy_food_payload(
+        name: str,
+        description: str,
+        grocy_id: str,
+        existing_extras: Any,
+    ) -> dict[str, Any]:
+        """Build the Mealie Food payload owned by the Grocy product sync."""
+        extras = dict(existing_extras) if isinstance(existing_extras, dict) else {}
+        extras[_GROCY_PRODUCT_EXTRA_KEY] = grocy_id
+        extras[_SYNC_SOURCE_EXTRA_KEY] = "grocy"
+        return {
+            "name": name,
+            "description": description,
+            "extras": extras,
+        }
+
+    @staticmethod
+    def _food_needs_update(food: dict[str, Any], payload: dict[str, Any]) -> bool:
+        """Return whether a marked Mealie Food differs from Grocy catalog data."""
+        return any(food.get(key) != payload[key] for key in ("name", "description", "extras"))

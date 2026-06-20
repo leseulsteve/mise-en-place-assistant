@@ -31,6 +31,29 @@ MOCKED_FOODS = [
     for food_id, label, package, unit in _FOODS
 ]
 
+MOCKED_STOCK = [
+    {"id": "mocked:baby-spinach", "quantity": 180},
+    {"id": "mocked:eggs", "quantity": 2},
+    {"id": "mocked:whole-milk", "quantity": 0},
+    {"id": "mocked:basmati-rice", "quantity": 1200},
+    {"id": "mocked:coffee", "quantity": 350},
+    {"id": "mocked:frozen-peas", "quantity": 600},
+    # Newly bought products for the Needs Attention review flow.
+    {"id": "mocked:dark-chocolate", "quantity": 2},
+    {"id": "mocked:coconut-milk", "quantity": 3},
+    {"id": "mocked:salmon", "quantity": 450},
+    {"id": "mocked:avocado", "quantity": 4},
+    {"id": "mocked:olive-oil", "quantity": 750.5},
+    {"id": "mocked:soy-sauce", "quantity": 125},
+    {"id": "mocked:bananas", "quantity": 6},
+]
+
+MOCKED_STORAGE_LOCATIONS = [
+    {"id": "mocked:fridge", "name": "Fridge", "provider": "mocked", "active": True},
+    {"id": "mocked:freezer", "name": "Freezer", "provider": "mocked", "active": True},
+    {"id": "mocked:pantry", "name": "Pantry", "provider": "mocked", "active": True},
+]
+
 # Keep the offline provider useful for the prepared-meal workflow too.
 MOCKED_RECIPES = [
     {"id": "mocked:recipe:chicken-curry", "label": "Chicken curry", "format": "Batch-friendly curry", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:chicken"], "categories": ["Dinner"]},

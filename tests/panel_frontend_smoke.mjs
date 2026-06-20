@@ -8,6 +8,10 @@ class FakeShadowRoot {
   getElementById() {
     return null;
   }
+
+  querySelectorAll() {
+    return [];
+  }
 }
 
 globalThis.HTMLElement = class {
@@ -58,6 +62,7 @@ panel.hass = {
     containers: [],
     items: [],
     locations: [],
+    areas: [],
     logbook: [],
     empty_containers: [],
     low_containers: [],

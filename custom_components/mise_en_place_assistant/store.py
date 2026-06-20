@@ -18,6 +18,14 @@ from homeassistant.helpers.storage import Store
 
 from .const import (
     CONF_CATALOG_PROVIDER,
+    CONF_CATALOG_PROVIDERS,
+    CONF_DEV_MODE,
+    CONF_GROCY_TOKEN,
+    CONF_GROCY_URL,
+    CONF_KITCHENOWL_SHOPPING_LIST_ID,
+    CONF_KITCHENOWL_TOKEN,
+    CONF_KITCHENOWL_URL,
+    CONF_SHOPPING_LIST_PROVIDER,
     DEFAULT_UNIT,
     DOMAIN,
     CONF_MEALIE_TOKEN,
@@ -31,11 +39,23 @@ from .const import (
     EVENT_MISE_EN_PLACE_ASSISTANT_UPDATED,
     SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED,
     STORAGE_VERSION,
+    CATALOG_PROVIDERS,
+    PROVIDER_GROCY,
+    PROVIDER_KITCHENOWL,
     PROVIDER_MEALIE,
     PROVIDER_MOCKED,
+    SHOPPING_LIST_PROVIDER_AUTO,
+    LOCATION_TYPES,
+    PRODUCT_CONTAINER_POLICIES,
+    PRODUCT_MEAL_ROLES,
+    PRODUCT_STORAGE_BEHAVIORS,
+    VOID_LOCATION_ID,
+    VOID_LOCATION_NAME,
 )
+from .grocy import GrocyCatalogClient, GrocyCatalogError
+from .kitchenowl import KitchenOwlError, KitchenOwlShoppingClient
 from .mealie import MealieCatalogClient, MealieCatalogError
-from .mocked import MOCKED_FOODS, MOCKED_RECIPES
+from .mocked import MOCKED_FOODS, MOCKED_RECIPES, MOCKED_STOCK, MOCKED_STORAGE_LOCATIONS
 from .units import normalize_quantity, quantity_in_display_unit, units_are_compatible
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +88,9 @@ class MiseEnPlaceAssistantInventory:
             "devices": {},
             "catalog": [],
             "recipes": [],
+            "stock": [],
+            "storage_locations": [],
+            "product_metadata": {},
             "dial_theme": DEFAULT_DIAL_THEME,
         }
         self._listeners: list[Callable[[], None]] = []
@@ -79,13 +102,14 @@ class MiseEnPlaceAssistantInventory:
             self.data = stored
         changed = self._ensure_schema()
 
-        configured_locations = self.entry.options.get(
-            "initial_locations", self.entry.data.get("initial_locations", [])
-        )
-        for location in configured_locations:
-            location_count = len(self.locations)
-            self.ensure_location(location, save=False)
-            changed = len(self.locations) != location_count or changed
+        if self.mock_catalog_enabled():
+            configured_locations = self.entry.options.get(
+                "initial_locations", self.entry.data.get("initial_locations", [])
+            )
+            for location in configured_locations:
+                location_count = len(self.locations)
+                self.ensure_location(location, save=False)
+                changed = len(self.locations) != location_count or changed
 
         m5dial_device_id = self.entry.options.get(
             "m5dial_device_id", self.entry.data.get("m5dial_device_id")
@@ -103,19 +127,44 @@ class MiseEnPlaceAssistantInventory:
         _LOGGER.info(
             "Loaded Mise en Place inventory: containers=%d locations=%d",
             len(self.containers),
-            len(self.locations),
+            len(self.storage_locations()),
         )
 
     def _ensure_schema(self) -> bool:
         """Ensure old Mise en Place Assistant data remains usable by the reusable-container model."""
         changed = False
-        for key, default in (("items", {}), ("products", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {}), ("catalog", []), ("recipes", []), ("dial_theme", DEFAULT_DIAL_THEME)):
+        for key, default in (("items", {}), ("products", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {}), ("catalog", []), ("recipes", []), ("stock", []), ("storage_locations", []), ("product_metadata", {}), ("dial_theme", DEFAULT_DIAL_THEME)):
             if key not in self.data:
                 self.data[key] = default
                 changed = True
         if "mealie_catalog" in self.data and not self.data.get("catalog"):
             self.data["catalog"] = self.data["mealie_catalog"]
             changed = True
+
+        # Locations used to be keyed solely by their display name. Give each
+        # one a permanent ID so a rename cannot orphan its containers or Home
+        # Assistant sensor associations.
+        for key, location in list(self.locations.items()):
+            if not isinstance(location, dict):
+                location = {"name": str(location)}
+                self.locations[key] = location
+                changed = True
+            name = self._normalize_optional(location.get("name")) or key
+            candidate = {
+                "id": location.get("id") or f"location_{uuid5(_PRODUCT_NAMESPACE, f'location:{key}').hex}",
+                "name": name,
+                "location_type": location.get("location_type", "other"),
+                "area_id": location.get("area_id"),
+                "sensors": location.get("sensors") if isinstance(location.get("sensors"), dict) else {},
+                "monitoring": location.get("monitoring") if isinstance(location.get("monitoring"), dict) else {},
+                "created_at": location.get("created_at", _utc_now()),
+                "updated_at": location.get("updated_at", location.get("created_at", _utc_now())),
+            }
+            if candidate["location_type"] not in LOCATION_TYPES:
+                candidate["location_type"] = "other"
+            if any(location.get(field) != value for field, value in candidate.items()):
+                location.update(candidate)
+                changed = True
 
         # `items` was the pre-catalog registry, keyed by an external/mock item
         # ID. Keep it untouched for migration compatibility, but move canonical
@@ -135,6 +184,9 @@ class MiseEnPlaceAssistantInventory:
             if "content_kind" not in container:
                 container["content_kind"] = "ingredient" if container.get("item_id") else None
                 changed = True
+            if "archived" not in container:
+                container["archived"] = False
+                changed = True
             if not container.get("tag_id"):
                 container["tag_id"] = tag_id
                 changed = True
@@ -149,6 +201,12 @@ class MiseEnPlaceAssistantInventory:
                 changed = True
             if "updated_at" not in container:
                 container["updated_at"] = container["created_at"]
+                changed = True
+            if not container.get("location_id"):
+                legacy_location = self._normalize_optional(container.get("location"))
+                location = self.locations.get(legacy_location.casefold()) if legacy_location else None
+                container["location_id"] = location["id"] if location else VOID_LOCATION_ID
+                container["location"] = location["name"] if location else VOID_LOCATION_NAME
                 changed = True
             normalized_quantity = normalize_quantity(
                 container.get("display_quantity", container.get("quantity", 0)),
@@ -204,6 +262,10 @@ class MiseEnPlaceAssistantInventory:
     def containers(self) -> dict[str, dict[str, Any]]:
         return self.data.setdefault("containers", {})
 
+    def active_containers(self) -> list[dict[str, Any]]:
+        """Return containers that remain in active rotation."""
+        return [container for container in self.containers.values() if not container.get("archived")]
+
     @property
     def items(self) -> dict[str, dict[str, Any]]:
         """Return the legacy item registry retained for storage compatibility."""
@@ -215,8 +277,42 @@ class MiseEnPlaceAssistantInventory:
         return self.data.setdefault("products", {})
 
     @property
+    def product_metadata(self) -> dict[str, dict[str, Any]]:
+        """Return HA-owned Mise workflow metadata keyed by provider item ID."""
+        return self.data.setdefault("product_metadata", {})
+
+    @property
     def locations(self) -> dict[str, dict[str, Any]]:
+        """Return HA-only annotations keyed by provider-owned location IDs."""
         return self.data.setdefault("locations", {})
+
+    def storage_locations(self) -> list[dict[str, Any]]:
+        """Return provider-owned storage locations, with local HA annotations merged in."""
+        provider_locations = self.data.get("storage_locations", [])
+        if not isinstance(provider_locations, list):
+            provider_locations = []
+        if not provider_locations and self.mock_catalog_enabled():
+            provider_locations = [
+                {"id": location["id"], "name": location["name"], "provider": PROVIDER_MOCKED, "active": True}
+                for location in self.locations.values()
+            ]
+        merged: list[dict[str, Any]] = []
+        for location in provider_locations:
+            if not isinstance(location, dict) or not location.get("id"):
+                continue
+            annotation = self.locations.get(str(location["id"]), {})
+            merged.append(
+                {
+                    **annotation,
+                    **location,
+                    "location_type": annotation.get("location_type", "other"),
+                    "area_id": annotation.get("area_id"),
+                    "sensors": annotation.get("sensors", {}),
+                    "monitoring": annotation.get("monitoring", {}),
+                    "editable": True,
+                }
+            )
+        return sorted(merged, key=lambda item: str(item.get("name", "")).casefold())
 
     @property
     def logbook(self) -> list[dict[str, Any]]:
@@ -231,48 +327,237 @@ class MiseEnPlaceAssistantInventory:
         compact = "".join(character for character in tag_id if character.isalnum())
         return f"Container {compact[-6:].upper() or 'untagged'}"
 
+    def _ensure_write_mode(self) -> None:
+        """Reject service-driven mutations while DEV mode is using mock data."""
+        if self.mock_catalog_enabled():
+            raise ValueError("DEV mode is read-only; use live providers to test CRUD")
+
     async def async_catalog_payload(self) -> dict[str, Any]:
-        """Return the selected provider's food catalog and local locations."""
+        """Return configured providers' food catalogs and local locations."""
         items = await self.async_refresh_catalog()
-        locations = [location["name"] for location in self.locations.values()]
+        locations = self.location_choices()
         return {"items": items, "recipes": self.recipe_items(), "locations": locations}
 
     def catalog_provider(self) -> str:
-        """Return the configured catalog provider, preserving old entries as Mocked."""
-        return self.entry.options.get(
-            CONF_CATALOG_PROVIDER,
-            self.entry.data.get(CONF_CATALOG_PROVIDER, DEFAULT_CATALOG_PROVIDER),
+        """Return the first configured catalog provider for legacy callers."""
+        providers = self.effective_catalog_providers()
+        return providers[0] if providers else ""
+
+    def catalog_providers(self) -> list[str]:
+        """Return configured live catalog providers."""
+        configured = self.entry.options.get(
+            CONF_CATALOG_PROVIDERS,
+            self.entry.data.get(CONF_CATALOG_PROVIDERS),
+        )
+        if configured is None:
+            configured = [
+                self.entry.options.get(
+                    CONF_CATALOG_PROVIDER,
+                    self.entry.data.get(CONF_CATALOG_PROVIDER, DEFAULT_CATALOG_PROVIDER),
+                )
+            ]
+        providers: list[str] = []
+        for provider in configured if isinstance(configured, list) else [configured]:
+            if provider in CATALOG_PROVIDERS and provider not in providers:
+                providers.append(provider)
+        return providers
+
+    def mock_catalog_enabled(self) -> bool:
+        """Return whether DEV fallback data is allowed."""
+        if CONF_DEV_MODE in self.entry.options:
+            return bool(self.entry.options.get(CONF_DEV_MODE))
+        if CONF_DEV_MODE in self.entry.data:
+            return bool(self.entry.data.get(CONF_DEV_MODE))
+        configured = self.entry.options.get(CONF_CATALOG_PROVIDERS, self.entry.data.get(CONF_CATALOG_PROVIDERS))
+        legacy_provider = self.entry.data.get(CONF_CATALOG_PROVIDER, DEFAULT_CATALOG_PROVIDER)
+        return configured is None and legacy_provider == PROVIDER_MOCKED
+
+    def _ensure_mock_product_metadata(self) -> bool:
+        """Seed reviewed mock products so DEV attention stays focused."""
+        now = _utc_now()
+        changed = False
+        reviewed = {
+            "mocked:baby-spinach": ("original_packaging", "fridge", "ingredient", True, "Leafy produce bought in a bag."),
+            "mocked:eggs": ("original_packaging", "fridge", "staple", True, "Low-stock carton for attention testing."),
+            "mocked:basmati-rice": ("container", "pantry", "staple", True, "Dry good normally decanted into a jar."),
+            "mocked:coffee": ("container", "pantry", "staple", False, "Inventory item that should not appear in recipes."),
+            "mocked:frozen-peas": ("original_packaging", "freezer", "ingredient", True, "Frozen bag with freezer behavior."),
+            "mocked:olive-oil": ("original_packaging", "pantry", "condiment", True, "Fractional ml stock fixture."),
+            "mocked:soy-sauce": ("original_packaging", "pantry", "condiment", True, "Partially used bottle fixture."),
+            "mocked:bananas": ("no_container", "counter", "ignore", False, "Counter produce that should not use an NFC container."),
+        }
+        for item_id, (container_policy, storage_behavior, meal_role, available_in_mealie, notes) in reviewed.items():
+            if item_id in self.product_metadata:
+                continue
+            self.product_metadata[item_id] = {
+                "item_id": item_id,
+                "container_policy": container_policy,
+                "storage_behavior": storage_behavior,
+                "meal_role": meal_role,
+                "available_in_mealie": available_in_mealie,
+                "notes": notes,
+                "created_at": now,
+                "updated_at": now,
+                "reviewed_at": now,
+            }
+            changed = True
+        return changed
+
+    def effective_catalog_providers(self) -> list[str]:
+        """Return live providers, or DEV mock data when no live provider is set up."""
+        if self.mock_catalog_enabled():
+            return [PROVIDER_MOCKED]
+        providers = self.catalog_providers()
+        if providers:
+            return providers
+        return []
+
+    def live_stack_required(self) -> bool:
+        """Return whether all external data/workflow providers must be usable."""
+        return not self.mock_catalog_enabled()
+
+    def kitchenowl_configured(self) -> bool:
+        """Return whether KitchenOwl shopping-list settings are complete."""
+        return bool(
+            self.entry.options.get(CONF_KITCHENOWL_URL, self.entry.data.get(CONF_KITCHENOWL_URL, ""))
+            and self.entry.options.get(CONF_KITCHENOWL_TOKEN, self.entry.data.get(CONF_KITCHENOWL_TOKEN, ""))
+            and self.entry.options.get(
+                CONF_KITCHENOWL_SHOPPING_LIST_ID,
+                self.entry.data.get(CONF_KITCHENOWL_SHOPPING_LIST_ID),
+            )
         )
 
+    def shopping_list_provider(self) -> str:
+        """Return the preferred shopping-list target."""
+        provider = self.entry.options.get(
+            CONF_SHOPPING_LIST_PROVIDER,
+            self.entry.data.get(CONF_SHOPPING_LIST_PROVIDER, SHOPPING_LIST_PROVIDER_AUTO),
+        )
+        return provider if provider in {SHOPPING_LIST_PROVIDER_AUTO, PROVIDER_GROCY, PROVIDER_KITCHENOWL} else SHOPPING_LIST_PROVIDER_AUTO
+
+    def grocy_configured(self) -> bool:
+        """Return whether Grocy credentials are available."""
+        return bool(
+            self.entry.options.get(CONF_GROCY_URL, self.entry.data.get(CONF_GROCY_URL, ""))
+            and self.entry.options.get(CONF_GROCY_TOKEN, self.entry.data.get(CONF_GROCY_TOKEN, ""))
+        )
+
+    async def async_validate_workflow_providers(self) -> None:
+        """Validate required non-catalog workflow providers before startup completes."""
+        if not self.live_stack_required():
+            return
+        if set(self.catalog_providers()) != set(CATALOG_PROVIDERS):
+            raise MealieCatalogError("Mealie and Grocy must both be configured outside DEV mode")
+        if self.shopping_list_provider() == PROVIDER_KITCHENOWL:
+            if not self.kitchenowl_configured():
+                raise MealieCatalogError("KitchenOwl must be configured when it owns shopping lists")
+            try:
+                await self._kitchenowl_client().async_test_connection()
+            except (KitchenOwlError, ValueError) as err:
+                raise MealieCatalogError("KitchenOwl shopping list is unavailable") from err
+
+    @staticmethod
+    def _with_provider(records: list[dict[str, Any]], provider: str) -> list[dict[str, Any]]:
+        """Copy catalog records with explicit source attribution."""
+        return [{**record, "provider": record.get("provider", provider)} for record in records]
+
+    def recipe_provider_for_item(self, recipe: dict[str, Any]) -> str:
+        """Return the product source provider for a recipe item."""
+        return str(recipe.get("provider") or f"{self.catalog_provider()}_recipe")
+
     async def async_refresh_catalog(self) -> list[dict[str, str]]:
-        """Fetch the selected catalog provider; do not silently switch providers."""
-        provider = self.catalog_provider()
-        if provider == PROVIDER_MOCKED:
-            items = MOCKED_FOODS
-            recipes = MOCKED_RECIPES
-        elif provider == PROVIDER_MEALIE:
-            items, recipes = await self._async_fetch_mealie_catalog()
-        else:
-            raise MealieCatalogError(f"Unsupported catalog provider: {provider}")
-        changed = items != self.data.get("catalog") or recipes != self.data.get("recipes")
+        """Fetch configured catalog providers; do not silently switch providers."""
+        items: list[dict[str, Any]] = []
+        recipes: list[dict[str, Any]] = []
+        stock: list[dict[str, Any]] = []
+        storage_locations: list[dict[str, Any]] = []
+        mock_metadata_changed = False
+        providers = self.effective_catalog_providers()
+        if not providers:
+            raise MealieCatalogError("At least one data provider must be configured")
+        for provider in providers:
+            if provider == PROVIDER_MOCKED:
+                items.extend(self._with_provider(MOCKED_FOODS, PROVIDER_MOCKED))
+                recipes.extend(self._with_provider(MOCKED_RECIPES, f"{PROVIDER_MOCKED}_recipe"))
+                stock = list(MOCKED_STOCK)
+                storage_locations = list(MOCKED_STORAGE_LOCATIONS)
+                mock_metadata_changed = self._ensure_mock_product_metadata()
+            elif provider == PROVIDER_MEALIE:
+                _, provider_recipes = await self._async_fetch_mealie_catalog()
+                recipes.extend(self._with_provider(provider_recipes, f"{PROVIDER_MEALIE}_recipe"))
+            elif provider == PROVIDER_GROCY:
+                grocy = self._grocy_client()
+                try:
+                    items.extend(await grocy.async_fetch_products())
+                    stock = await grocy.async_fetch_stock()
+                    storage_locations = await grocy.async_fetch_locations()
+                except GrocyCatalogError as err:
+                    raise MealieCatalogError("Grocy inventory is unavailable") from err
+            else:
+                raise MealieCatalogError(f"Unsupported catalog provider: {provider}")
+        changed = (
+            items != self.data.get("catalog")
+            or recipes != self.data.get("recipes")
+            or stock != self.data.get("stock", [])
+            or storage_locations != self.data.get("storage_locations", [])
+            or mock_metadata_changed
+        )
         if changed:
             self.data["catalog"] = items
             self.data["recipes"] = recipes
-        foods_by_id = {item["id"]: item for item in items}
+            self.data["stock"] = stock
+            self.data["storage_locations"] = storage_locations
+            for location in storage_locations:
+                async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "location", location["id"])
+        foods_by_source = {
+            (item.get("provider", self.catalog_provider()), item["id"]): item
+            for item in items
+        }
         for product in list(self.products.values()):
             source = product.get("source") or {}
-            food = foods_by_id.get(source.get("id")) if source.get("provider") == provider else None
+            food = foods_by_source.get((source.get("provider"), source.get("id")))
             if food:
                 _, product_changed = self._ensure_product(
-                    food["id"], food["label"], food["format"], food["unit"], source_provider=provider
+                    food["id"], food["label"], food["format"], food["unit"],
+                    source_provider=str(food.get("provider") or self.catalog_provider()),
                 )
                 changed = changed or product_changed
         if changed:
             await self.async_save(notify=False)
         return items
 
+    async def _async_fetch_grocy_catalog(self) -> list[dict[str, str]]:
+        """Fetch Grocy products for the Grocy provider."""
+        try:
+            return await self._grocy_client().async_fetch_products()
+        except GrocyCatalogError as err:
+            raise MealieCatalogError("Grocy product catalog is unavailable") from err
+
+    def _grocy_client(self) -> GrocyCatalogClient:
+        """Return a Grocy client from validated config-entry data."""
+        url = self.entry.options.get(CONF_GROCY_URL, self.entry.data.get(CONF_GROCY_URL, ""))
+        token = self.entry.options.get(CONF_GROCY_TOKEN, self.entry.data.get(CONF_GROCY_TOKEN, ""))
+        if url and "://" not in url:
+            url = f"http://{url}"
+        if not url or not token:
+            raise MealieCatalogError("Grocy URL and API key must be configured")
+        try:
+            return GrocyCatalogClient(self.hass, url, token)
+        except ValueError as err:
+            raise MealieCatalogError("Grocy product catalog is unavailable") from err
+
     async def _async_fetch_mealie_catalog(self) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
         """Fetch Mealie foods and recipes for the Mealie provider."""
+        client = self._mealie_client()
+        try:
+            items = await client.async_fetch_foods()
+            recipes = await client.async_fetch_recipes()
+        except (MealieCatalogError, ValueError) as err:
+            raise MealieCatalogError("Mealie food catalog is unavailable") from err
+        return items, recipes
+
+    def _mealie_client(self) -> MealieCatalogClient:
+        """Return a Mealie client from a linked HA entry or manual credentials."""
         source_entry_id = self.entry.options.get(
             CONF_MEALIE_ENTRY_ID, self.entry.data.get(CONF_MEALIE_ENTRY_ID)
         )
@@ -292,17 +577,139 @@ class MiseEnPlaceAssistantInventory:
         if not url or not token:
             raise MealieCatalogError("Mealie URL and API token must be configured")
         try:
-            client = MealieCatalogClient(self.hass, url, token)
-            items = await client.async_fetch_foods()
-            recipes = await client.async_fetch_recipes()
-        except (MealieCatalogError, ValueError) as err:
+            return MealieCatalogClient(self.hass, url, token)
+        except ValueError as err:
             raise MealieCatalogError("Mealie food catalog is unavailable") from err
-        return items, recipes
 
     def catalog_items(self) -> list[dict[str, str]]:
         """Return the most recently verified selected-provider catalog."""
         items = self.data.get("catalog", [])
         return items if isinstance(items, list) else []
+
+    def product_attention_items(self) -> list[dict[str, Any]]:
+        """Return provider products whose Mise workflow metadata needs review."""
+        stock_by_source = {
+            str(row.get("id")): row
+            for row in self.data.get("stock", [])
+            if isinstance(row, dict) and row.get("id")
+        }
+        attention: list[dict[str, Any]] = []
+        reviewable_providers = {PROVIDER_GROCY}
+        if self.mock_catalog_enabled():
+            reviewable_providers.add(PROVIDER_MOCKED)
+        for item in self.catalog_items():
+            if item.get("provider") not in reviewable_providers or not item.get("id"):
+                continue
+            item_id = str(item["id"])
+            metadata = self.product_metadata.get(item_id, {})
+            stock = stock_by_source.get(item_id, {})
+            quantity = stock.get("quantity", 0) if stock else 0
+            try:
+                has_stock = float(quantity or 0) > 0
+            except (TypeError, ValueError):
+                has_stock = False
+            if self.mock_catalog_enabled() and not has_stock:
+                continue
+            reasons: list[str] = []
+            if not metadata.get("reviewed_at"):
+                reasons.append("Needs Mise workflow review")
+            if metadata.get("container_policy", "unknown") == "unknown":
+                reasons.append("Container policy not selected")
+            if metadata.get("storage_behavior", "unknown") == "unknown":
+                reasons.append("Storage behavior not selected")
+            if metadata.get("meal_role", "unknown") == "unknown":
+                reasons.append("Meal role not selected")
+            if "available_in_mealie" not in metadata:
+                reasons.append("Mealie availability not selected")
+            if not reasons:
+                continue
+            attention.append(
+                {
+                    "item_id": item_id,
+                    "label": item.get("label") or item_id,
+                    "format": item.get("format") or "",
+                    "unit": item.get("unit") or DEFAULT_UNIT,
+                    "quantity": quantity,
+                    "has_stock": has_stock,
+                    "metadata": {
+                        "container_policy": metadata.get("container_policy", "unknown"),
+                        "storage_behavior": metadata.get("storage_behavior", "unknown"),
+                        "meal_role": metadata.get("meal_role", "unknown"),
+                        "available_in_mealie": bool(metadata.get("available_in_mealie", False)),
+                        "available_in_mealie_set": "available_in_mealie" in metadata,
+                        "notes": metadata.get("notes", ""),
+                        "reviewed_at": metadata.get("reviewed_at", ""),
+                    },
+                    "reasons": reasons,
+                }
+            )
+        return sorted(
+            attention,
+            key=lambda item: (not item["has_stock"], str(item["label"]).casefold()),
+        )
+
+    async def async_update_product_metadata(
+        self,
+        item_id: str,
+        *,
+        container_policy: str = "unknown",
+        storage_behavior: str = "unknown",
+        meal_role: str = "unknown",
+        available_in_mealie: bool | None = None,
+        notes: str | None = None,
+    ) -> dict[str, Any]:
+        """Store HA-owned Mise workflow hints for a provider product."""
+        item_id = str(item_id).strip()
+        if not item_id:
+            raise ValueError("item_id is required")
+        item = await self.async_catalog_item(item_id)
+        if item.get("provider") != PROVIDER_GROCY and not (
+            self.mock_catalog_enabled() and item.get("provider") == PROVIDER_MOCKED
+        ):
+            raise ValueError("Only Grocy products can be annotated for Mise workflow review outside DEV mode")
+        if container_policy not in PRODUCT_CONTAINER_POLICIES:
+            raise ValueError("Unsupported container policy")
+        if storage_behavior not in PRODUCT_STORAGE_BEHAVIORS:
+            raise ValueError("Unsupported storage behavior")
+        if meal_role not in PRODUCT_MEAL_ROLES:
+            raise ValueError("Unsupported meal role")
+        now = _utc_now()
+        current = self.product_metadata.get(item_id, {})
+        sync_result: dict[str, int] | None = None
+        self.product_metadata[item_id] = {
+            "item_id": item_id,
+            "container_policy": container_policy,
+            "storage_behavior": storage_behavior,
+            "meal_role": meal_role,
+            "available_in_mealie": bool(available_in_mealie),
+            "notes": self._normalize_optional(notes) or "",
+            "created_at": current.get("created_at", now),
+            "updated_at": now,
+            "reviewed_at": now,
+        }
+        if (
+            available_in_mealie
+            and item.get("provider") == PROVIDER_GROCY
+            and {PROVIDER_MEALIE, PROVIDER_GROCY} <= set(self.effective_catalog_providers())
+        ):
+            try:
+                sync_result = await self._mealie_client().async_sync_grocy_products([item])
+            except MealieCatalogError as err:
+                raise ValueError("Mealie food sync is unavailable") from err
+        self._add_log_entry(
+            "Product metadata reviewed",
+            f"{item['label']} Mise workflow metadata was updated.",
+            {
+                "item_id": item_id,
+                "container_policy": container_policy,
+                "storage_behavior": storage_behavior,
+                "meal_role": meal_role,
+                "available_in_mealie": bool(available_in_mealie),
+                "mealie_sync": sync_result,
+            },
+        )
+        await self.async_save()
+        return self.product_metadata[item_id]
 
     def recipe_items(self) -> list[dict[str, Any]]:
         """Return the most recently verified recipe catalog."""
@@ -342,7 +749,17 @@ class MiseEnPlaceAssistantInventory:
         key = name.casefold()
         if key in self.locations:
             return self.locations[key]["name"]
-        self.locations[key] = {"name": name, "created_at": _utc_now()}
+        now = _utc_now()
+        self.locations[key] = {
+            "id": f"location_{uuid4().hex}",
+            "name": name,
+            "location_type": "other",
+            "area_id": None,
+            "sensors": {},
+            "monitoring": {},
+            "created_at": now,
+            "updated_at": now,
+        }
         self._add_log_entry("Location created", f"{name} was added as an inventory location.", {"location": name})
         async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "location", key)
         if save:
@@ -350,14 +767,199 @@ class MiseEnPlaceAssistantInventory:
         return name
 
     async def async_create_location(self, name: str) -> None:
-        before = len(self.locations)
-        self.ensure_location(name)
-        if len(self.locations) != before:
-            await self.async_save()
+        self._ensure_write_mode()
+        raise ValueError("Create storage locations in Grocy, then refresh Mise en Place Assistant")
+
+    def location_for_id(self, location_id: str | None) -> dict[str, Any] | None:
+        """Return a provider-owned storage location by stable ID, including The Void."""
+        if location_id == VOID_LOCATION_ID:
+            return {
+                "id": VOID_LOCATION_ID,
+                "name": VOID_LOCATION_NAME,
+                "location_type": "system",
+                "editable": False,
+            }
+        return next((location for location in self.storage_locations() if location.get("id") == location_id), None)
+
+    def location_choices(self) -> list[dict[str, str]]:
+        """Return selectable locations for the panel and M5Dial."""
+        return [
+            {"id": location["id"], "label": location["name"]}
+            for location in self.storage_locations()
+            if location.get("active", True)
+        ]
+
+    def location_health(self, location: dict[str, Any]) -> dict[str, Any]:
+        """Summarize configured Home Assistant entities without controlling them."""
+        sensors = location.get("sensors") or {}
+        monitoring = location.get("monitoring") or {}
+        readings: dict[str, Any] = {}
+        problems: list[str] = []
+        for role, entity_id in sensors.items():
+            if not entity_id:
+                continue
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in {"unknown", "unavailable"}:
+                readings[role] = {"entity_id": entity_id, "state": "unavailable"}
+                problems.append(f"{role.replace('_', ' ')} unavailable")
+            else:
+                readings[role] = {"entity_id": entity_id, "state": state.state, "unit": state.attributes.get("unit_of_measurement")}
+        temperature = readings.get("temperature", {}).get("state")
+        if temperature not in (None, "unavailable"):
+            try:
+                value = float(temperature)
+                minimum, maximum = monitoring.get("temperature_min"), monitoring.get("temperature_max")
+                if minimum is not None and value < float(minimum):
+                    problems.append("temperature below range")
+                if maximum is not None and value > float(maximum):
+                    problems.append("temperature above range")
+            except (TypeError, ValueError):
+                problems.append("temperature is not numeric")
+        plug = readings.get("power_switch", {}).get("state")
+        if monitoring.get("power_required") and plug not in (None, "on"):
+            problems.append("appliance plug is off")
+        status = "critical" if any("temperature" in issue or "plug" in issue for issue in problems) else "warning" if problems else ("not_configured" if not sensors else "ok")
+        return {"status": status, "problems": problems, "readings": readings}
+
+    def resolve_location(self, location: str | None = None, location_id: str | None = None) -> dict[str, Any]:
+        """Resolve a Grocy-owned user-selected location without allowing The Void as input."""
+        if location_id:
+            resolved = self.location_for_id(location_id)
+            if not resolved or location_id == VOID_LOCATION_ID:
+                raise ValueError("Unknown or protected location_id")
+            return resolved
+        if not (name := self._normalize_optional(location)):
+            return self.location_for_id(VOID_LOCATION_ID)  # type: ignore[return-value]
+        resolved = next(
+            (candidate for candidate in self.storage_locations() if candidate.get("name", "").casefold() == name.casefold()),
+            None,
+        )
+        if not resolved:
+            raise ValueError("Unknown Grocy location")
+        return resolved
+
+    async def async_create_location_record(
+        self, *, name: str, location_type: str = "other", area_id: str | None = None,
+        sensors: dict[str, str] | None = None, monitoring: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Reject local storage-location creation; Grocy owns location identity."""
+        self._ensure_write_mode()
+        raise ValueError("Create storage locations in Grocy, then refresh Mise en Place Assistant")
+
+    async def async_update_location(self, location_id: str, **updates: Any) -> dict[str, Any]:
+        self._ensure_write_mode()
+        location = self.location_for_id(location_id)
+        if not location or location_id == VOID_LOCATION_ID:
+            raise ValueError("Unknown or protected location_id")
+        location_type = updates.get("location_type", location.get("location_type", "other"))
+        if location_type not in LOCATION_TYPES:
+            raise ValueError("Unsupported location type")
+        annotation = self.locations.get(location_id, {})
+        now = _utc_now()
+        self.locations[location_id] = {
+            "id": location_id,
+            "location_type": location_type,
+            "area_id": self._normalize_optional(updates.get("area_id", annotation.get("area_id"))),
+            "sensors": dict(updates.get("sensors", annotation.get("sensors", {}))),
+            "monitoring": dict(updates.get("monitoring", annotation.get("monitoring", {}))),
+            "created_at": annotation.get("created_at", now),
+            "updated_at": now,
+        }
+        self._add_log_entry("Location annotated", f"{location['name']} monitoring metadata was updated.", {"location_id": location_id})
+        await self.async_save()
+        return self.location_for_id(location_id) or self.locations[location_id]
+
+    async def async_delete_location(self, location_id: str) -> int:
+        """Remove local HA annotations; Grocy owns storage-location deletion."""
+        self._ensure_write_mode()
+        location = self.location_for_id(location_id)
+        if not location or location_id == VOID_LOCATION_ID:
+            raise ValueError("Unknown or protected location_id")
+        removed = 1 if self.locations.pop(location_id, None) else 0
+        self._add_log_entry("Location annotation removed", f"{location['name']} monitoring metadata was removed.", {"location_id": location_id})
+        await self.async_save()
+        return removed
 
     def enrolled_m5dial(self) -> dict[str, Any] | None:
         """Return the Home Assistant device selected as the M5Dial, if any."""
         return self.devices.get("m5dial")
+
+    async def _async_apply_grocy_stock_replacement(
+        self,
+        before: dict[str, Any] | None,
+        after: dict[str, Any],
+    ) -> None:
+        """Apply a staged container transaction to Grocy before local save."""
+        if self.mock_catalog_enabled():
+            return
+        before_product = self.product_for_container(before or {})
+        after_product = self.product_for_container(after)
+        before_source = before_product.get("source") if before_product else {}
+        after_source = after_product.get("source") if after_product else {}
+        if before_source.get("provider") != PROVIDER_GROCY and after_source.get("provider") != PROVIDER_GROCY:
+            return
+        client = self._grocy_client()
+        before_amount = float((before or {}).get("quantity", 0) or 0)
+        after_amount = float(after.get("quantity", 0) or 0)
+        before_location_id = (before or {}).get("location_id")
+        after_location_id = after.get("location_id")
+        note = f"Mise en Place Assistant container {after.get('tag_id') or ''}".strip()
+        stock_changed = False
+        if before_source != after_source and before_amount > 0 and after_amount > 0:
+            raise ValueError("Empty a Grocy-backed container before changing its product")
+        if before_source == after_source and before_location_id != after_location_id and before_amount > 0:
+            raise ValueError("Empty a Grocy-backed container before moving it to another location")
+
+        if before_source.get("provider") == PROVIDER_GROCY and before_amount > 0:
+            try:
+                if before_source != after_source:
+                    await client.async_consume_stock(before_source["id"], before_amount, location_id=before_location_id, note=note)
+                    stock_changed = True
+                elif after_amount < before_amount:
+                    amount = before_amount - after_amount
+                    await client.async_consume_stock(before_source["id"], amount, location_id=before_location_id, note=note)
+                    stock_changed = True
+            except GrocyCatalogError as err:
+                raise ValueError("Grocy rejected the stock decrease") from err
+
+        if after_source.get("provider") == PROVIDER_GROCY and after_amount > 0:
+            try:
+                if before_source != after_source:
+                    await client.async_add_stock(
+                        after_source["id"],
+                        after_amount,
+                        location_id=after_location_id,
+                        note=note,
+                        **self._grocy_stock_metadata(after),
+                    )
+                    stock_changed = True
+                elif after_amount > before_amount:
+                    amount = after_amount - before_amount
+                    await client.async_add_stock(
+                        after_source["id"],
+                        amount,
+                        location_id=after_location_id,
+                        note=note,
+                        **self._grocy_stock_metadata(after),
+                    )
+                    stock_changed = True
+            except GrocyCatalogError as err:
+                raise ValueError("Grocy rejected the stock increase") from err
+
+        if stock_changed:
+            try:
+                self.data["stock"] = await client.async_fetch_stock()
+            except GrocyCatalogError:
+                _LOGGER.warning("Grocy accepted a stock mutation, but refreshed stock totals are unavailable")
+
+    @staticmethod
+    def _grocy_stock_metadata(container: dict[str, Any]) -> dict[str, Any]:
+        """Return optional Grocy stock fields that are meaningful on stock additions."""
+        return {
+            key: container[key]
+            for key in ("best_before_date", "purchased_date", "opened_date", "price")
+            if container.get(key) not in (None, "")
+        }
 
     async def async_create_container(
         self,
@@ -366,6 +968,7 @@ class MiseEnPlaceAssistantInventory:
         name: str | None = None,
         quantity: int | float = 0,
         location: str | None = None,
+        location_id: str | None = None,
         unit: str = DEFAULT_UNIT,
         item_id: str | None = None,
         item_label: str | None = None,
@@ -373,11 +976,56 @@ class MiseEnPlaceAssistantInventory:
         source_provider: str = "local",
         content_kind: str = "ingredient",
         classification: dict[str, str] | None = None,
+        best_before_date: str | None = None,
+        purchased_date: str | None = None,
+        opened_date: str | None = None,
+        price: int | float | None = None,
+    ) -> None:
+        self._ensure_write_mode()
+        await self._async_create_container(
+            tag_id=tag_id,
+            name=name,
+            quantity=quantity,
+            location=location,
+            location_id=location_id,
+            unit=unit,
+            item_id=item_id,
+            item_label=item_label,
+            item_format=item_format,
+            source_provider=source_provider,
+            content_kind=content_kind,
+            classification=classification,
+            best_before_date=best_before_date,
+            purchased_date=purchased_date,
+            opened_date=opened_date,
+            price=price,
+        )
+
+    async def _async_create_container(
+        self,
+        *,
+        tag_id: str,
+        name: str | None = None,
+        quantity: int | float = 0,
+        location: str | None = None,
+        location_id: str | None = None,
+        unit: str = DEFAULT_UNIT,
+        item_id: str | None = None,
+        item_label: str | None = None,
+        item_format: str | None = None,
+        source_provider: str = "local",
+        content_kind: str = "ingredient",
+        classification: dict[str, str] | None = None,
+        best_before_date: str | None = None,
+        purchased_date: str | None = None,
+        opened_date: str | None = None,
+        price: int | float | None = None,
     ) -> None:
         tag_id = self._normalize_tag_id(tag_id)
         old = self.containers.get(tag_id, {})
         quantity_data = normalize_quantity(quantity, unit)
-        location = self.ensure_location(location)
+        resolved_location = self.resolve_location(location, location_id)
+        location = resolved_location["name"]
         now = _utc_now()
         is_new = not old
         if content_kind not in {"ingredient", "recipe", "meal"}:
@@ -385,7 +1033,7 @@ class MiseEnPlaceAssistantInventory:
         product_id = self._resolve_product_id(
             item_id, item_label, item_format, unit, source_provider, classification
         )
-        self.containers[tag_id] = {
+        candidate = {
             "tag_id": tag_id,
             "name": self._normalize_optional(name) or old.get("name") or self.default_container_name(tag_id),
             "item_id": item_id,
@@ -393,12 +1041,27 @@ class MiseEnPlaceAssistantInventory:
             "item_format": item_format,
             "product_id": product_id,
             "content_kind": content_kind,
+            "archived": False,
+            "archived_at": None,
             **quantity_data,
             "location": location,
+            "location_id": resolved_location["id"],
             "unit": unit or DEFAULT_UNIT,
             "created_at": old.get("created_at", now),
             "updated_at": now,
         }
+        for key, value in (
+            ("best_before_date", best_before_date),
+            ("purchased_date", purchased_date),
+            ("opened_date", opened_date),
+            ("price", price),
+        ):
+            if value not in (None, ""):
+                candidate[key] = value
+            elif key in old:
+                candidate[key] = old[key]
+        await self._async_apply_grocy_stock_replacement(old, candidate)
+        self.containers[tag_id] = candidate
         if is_new:
             async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "container", tag_id)
         if product_id:
@@ -420,16 +1083,58 @@ class MiseEnPlaceAssistantInventory:
 
     async def async_create_recipe_container(
         self, *, recipe_id: str, content_kind: str, tag_id: str, name: str | None = None,
-        quantity: int | float = 0, location: str | None = None,
+        quantity: int | float = 0, location: str | None = None, location_id: str | None = None,
     ) -> None:
         """Create a portion-counted recipe or ready-meal container."""
+        self._ensure_write_mode()
         recipe = await self.async_recipe_item(recipe_id)
-        await self.async_create_container(
-            tag_id=tag_id, name=name, quantity=quantity, location=location,
+        await self._async_create_container(
+            tag_id=tag_id, name=name, quantity=quantity, location=location, location_id=location_id,
             unit=recipe["unit"], item_id=recipe["id"], item_label=recipe["label"],
-            item_format=recipe["format"], source_provider="mealie_recipe",
+            item_format=recipe["format"], source_provider=self.recipe_provider_for_item(recipe),
             content_kind=content_kind, classification=self._recipe_classification(recipe),
         )
+
+    async def async_seed_demo_data(self) -> int:
+        """Add a bounded, repeatable set of containers for panel review.
+
+        Demo tag IDs are deliberately stable, so a retried setup refreshes the
+        same examples instead of accumulating duplicate stock.
+        """
+        foods = {item["id"]: item for item in self.catalog_items()}
+        recipes = {item["id"]: item for item in self.recipe_items()}
+        examples = (
+            ("demo:spinach", "Produce bin", "mocked:baby-spinach", 180, "Fridge", "ingredient"),
+            ("demo:eggs-low", "Egg carton", "mocked:eggs", 2, "Fridge", "ingredient"),
+            ("demo:milk-empty", "Milk carton", "mocked:whole-milk", 0, "Fridge", "ingredient"),
+            ("demo:rice", "Rice jar", "mocked:basmati-rice", 1200, "Pantry", "ingredient"),
+            ("demo:coffee", "Coffee canister", "mocked:coffee", 350, "Pantry", "ingredient"),
+            ("demo:peas", "Freezer peas", "mocked:frozen-peas", 600, "Freezer", "ingredient"),
+            ("demo:curry", "Curry portions", "mocked:recipe:chicken-curry", 3, "Fridge", "meal"),
+            ("demo:vegetables", "Roast vegetables", "mocked:recipe:roast-vegetables", 4, "Fridge", "meal"),
+            ("demo:meal-rice", "Cooked rice", "mocked:recipe:rice", 1, "Fridge", "meal"),
+            ("demo:lentil-loaf", "Lentil loaf", "mocked:recipe:lentil-loaf", 0, "Freezer", "recipe"),
+        )
+        created = 0
+        for tag_id, name, item_id, quantity, location, content_kind in examples:
+            item = foods.get(item_id) or recipes.get(item_id)
+            if item is None:
+                continue
+            await self._async_create_container(
+                tag_id=tag_id,
+                name=name,
+                quantity=quantity,
+                location=location,
+                unit=item["unit"],
+                item_id=item["id"],
+                item_label=item["label"],
+                item_format=item["format"],
+                source_provider=str(item.get("provider") or self.catalog_provider()),
+                content_kind=content_kind,
+                classification=self._recipe_classification(item) if item_id in recipes else None,
+            )
+            created += 1
+        return created
 
     async def async_update_container(
         self,
@@ -438,6 +1143,7 @@ class MiseEnPlaceAssistantInventory:
         quantity: int | float | None = None,
         delta: int | float | None = None,
         location: str | None = None,
+        location_id: str | None = None,
         name: str | None = None,
         unit: str | None = None,
         item_id: str | None = None,
@@ -445,67 +1151,125 @@ class MiseEnPlaceAssistantInventory:
         item_format: str | None = None,
         source_provider: str = "local",
         create_missing: bool = False,
+        best_before_date: str | None = None,
+        purchased_date: str | None = None,
+        opened_date: str | None = None,
+        price: int | float | None = None,
+    ) -> None:
+        self._ensure_write_mode()
+        await self._async_update_container(
+            tag_id=tag_id,
+            quantity=quantity,
+            delta=delta,
+            location=location,
+            location_id=location_id,
+            name=name,
+            unit=unit,
+            item_id=item_id,
+            item_label=item_label,
+            item_format=item_format,
+            source_provider=source_provider,
+            create_missing=create_missing,
+            best_before_date=best_before_date,
+            purchased_date=purchased_date,
+            opened_date=opened_date,
+            price=price,
+        )
+
+    async def _async_update_container(
+        self,
+        *,
+        tag_id: str,
+        quantity: int | float | None = None,
+        delta: int | float | None = None,
+        location: str | None = None,
+        location_id: str | None = None,
+        name: str | None = None,
+        unit: str | None = None,
+        item_id: str | None = None,
+        item_label: str | None = None,
+        item_format: str | None = None,
+        source_provider: str = "local",
+        create_missing: bool = False,
+        best_before_date: str | None = None,
+        purchased_date: str | None = None,
+        opened_date: str | None = None,
+        price: int | float | None = None,
     ) -> None:
         tag_id = self._normalize_tag_id(tag_id)
         if tag_id not in self.containers:
             if not create_missing:
                 raise KeyError(tag_id)
-            await self.async_create_container(tag_id=tag_id)
+            await self._async_create_container(tag_id=tag_id)
 
         container = self.containers[tag_id]
+        if container.get("archived"):
+            raise ValueError("Restore the container before updating it")
         before = dict(container)
-        quantity_changed = quantity is not None or delta is not None
-        display_unit = unit if unit is not None else container.get("display_unit", container.get("unit", DEFAULT_UNIT))
+        candidate = dict(container)
+        display_unit = unit if unit is not None else candidate.get("display_unit", candidate.get("unit", DEFAULT_UNIT))
         if quantity is not None:
-            container.update(normalize_quantity(quantity, display_unit))
+            candidate.update(normalize_quantity(quantity, display_unit))
         if delta is not None:
             # Deltas use the supplied unit, or the container's displayed unit.
             # A conversion is only performed inside that unit's own dimension.
             delta_data = normalize_quantity(abs(delta), display_unit)
-            if not units_are_compatible(container.get("canonical_unit"), delta_data["canonical_unit"]):
+            if not units_are_compatible(candidate.get("canonical_unit"), delta_data["canonical_unit"]):
                 raise ValueError(
                     f"Cannot apply {display_unit} to a container measured in "
-                    f"{container.get('canonical_unit', DEFAULT_UNIT)}"
+                    f"{candidate.get('canonical_unit', DEFAULT_UNIT)}"
                 )
             canonical_quantity = max(
                 0,
-                float(container.get("canonical_quantity", container.get("quantity", 0)))
+                float(candidate.get("canonical_quantity", candidate.get("quantity", 0)))
                 + (-1 if delta < 0 else 1) * float(delta_data["canonical_quantity"]),
             )
-            container.update(quantity_in_display_unit(canonical_quantity, display_unit))
+            candidate.update(quantity_in_display_unit(canonical_quantity, display_unit))
         if unit is not None and quantity is None and delta is None:
-            if not units_are_compatible(container.get("canonical_unit"), display_unit):
+            if not units_are_compatible(candidate.get("canonical_unit"), display_unit):
                 raise ValueError(
-                    f"Cannot change a container measured in {container.get('canonical_unit', DEFAULT_UNIT)} "
+                    f"Cannot change a container measured in {candidate.get('canonical_unit', DEFAULT_UNIT)} "
                     f"to {display_unit} without setting a new quantity"
                 )
-            container.update(
-                quantity_in_display_unit(container.get("canonical_quantity", container.get("quantity", 0)), display_unit)
+            candidate.update(
+                quantity_in_display_unit(candidate.get("canonical_quantity", candidate.get("quantity", 0)), display_unit)
             )
-        if location is not None:
-            container["location"] = self.ensure_location(location)
+        if location is not None or location_id is not None:
+            resolved_location = self.resolve_location(location, location_id)
+            candidate["location"] = resolved_location["name"]
+            candidate["location_id"] = resolved_location["id"]
         if name is not None:
-            container["name"] = self._normalize_optional(name) or self.default_container_name(tag_id)
+            candidate["name"] = self._normalize_optional(name) or self.default_container_name(tag_id)
         if item_id is not None:
-            container["item_id"] = item_id
+            candidate["item_id"] = item_id
         if item_label is not None:
-            container["item_label"] = item_label
+            candidate["item_label"] = item_label
         if item_format is not None:
-            container["item_format"] = item_format
+            candidate["item_format"] = item_format
         if item_id is not None or item_label is not None or item_format is not None:
-            container["product_id"] = self._resolve_product_id(
-                container.get("item_id"), container.get("item_label"),
-                container.get("item_format"), container.get("unit"),
+            candidate["product_id"] = self._resolve_product_id(
+                candidate.get("item_id"), candidate.get("item_label"),
+                candidate.get("item_format"), candidate.get("unit"),
                 source_provider,
             )
-        container["updated_at"] = _utc_now()
-        if container.get("product_id"):
-            async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "product", container["product_id"])
+        for key, value in (
+            ("best_before_date", best_before_date),
+            ("purchased_date", purchased_date),
+            ("opened_date", opened_date),
+            ("price", price),
+        ):
+            if value not in (None, ""):
+                candidate[key] = value
+        candidate["updated_at"] = _utc_now()
+        await self._async_apply_grocy_stock_replacement(before, candidate)
+        self.containers[tag_id] = candidate
+        if candidate.get("product_id"):
+            async_dispatcher_send(self.hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, "product", candidate["product_id"])
         self._add_log_entry(
             "Container updated",
-            f"{container['name']} inventory was updated.",
-            {"tag_id": tag_id, "old_quantity": before.get("quantity"), "quantity": container.get("quantity"),
-             "product": self.product_snapshot(container)},
+            f"{candidate['name']} inventory was updated.",
+            {"tag_id": tag_id, "old_quantity": before.get("quantity"), "quantity": candidate.get("quantity"),
+             "product": self.product_snapshot(candidate)},
         )
         await self.async_save()
 
@@ -515,7 +1279,185 @@ class MiseEnPlaceAssistantInventory:
         if quantity is not None and mode == "remove":
             delta = -float(quantity)
         set_quantity = float(quantity) if quantity is not None and mode == "set" else None
-        await self.async_update_container(tag_id=tag_id, quantity=set_quantity, delta=delta, create_missing=True)
+        await self.async_update_container(tag_id=tag_id, quantity=set_quantity, delta=delta)
+
+    async def async_clear_container(self, tag_id: str) -> None:
+        """Empty a known container without deleting its identity or product attribution."""
+        self._ensure_write_mode()
+        await self._async_update_container(tag_id=tag_id, quantity=0)
+
+    async def async_archive_container(self, tag_id: str) -> None:
+        """Retire an empty container from active inventory without deleting history."""
+        self._ensure_write_mode()
+        tag_id = self._normalize_tag_id(tag_id)
+        if tag_id not in self.containers:
+            raise KeyError(tag_id)
+        container = self.containers[tag_id]
+        if container.get("archived"):
+            return
+        if float(container.get("canonical_quantity", container.get("quantity", 0)) or 0) > 0:
+            raise ValueError("Clear the container before archiving it")
+        now = _utc_now()
+        container["archived"] = True
+        container["archived_at"] = now
+        container["updated_at"] = now
+        self._add_log_entry("Container archived", f"{container['name']} was removed from active rotation.", {"tag_id": tag_id})
+        await self.async_save()
+
+    async def async_restore_container(self, tag_id: str) -> None:
+        """Return an archived container to active rotation."""
+        self._ensure_write_mode()
+        tag_id = self._normalize_tag_id(tag_id)
+        if tag_id not in self.containers:
+            raise KeyError(tag_id)
+        container = self.containers[tag_id]
+        if not container.get("archived"):
+            return
+        now = _utc_now()
+        container["archived"] = False
+        container["restored_at"] = now
+        container["updated_at"] = now
+        self._add_log_entry("Container restored", f"{container['name']} returned to active rotation.", {"tag_id": tag_id})
+        await self.async_save()
+
+    def _kitchenowl_client(self) -> KitchenOwlShoppingClient:
+        """Return a KitchenOwl client from validated config-entry data."""
+        url = self.entry.options.get(CONF_KITCHENOWL_URL, self.entry.data.get(CONF_KITCHENOWL_URL, ""))
+        token = self.entry.options.get(CONF_KITCHENOWL_TOKEN, self.entry.data.get(CONF_KITCHENOWL_TOKEN, ""))
+        list_id = self.entry.options.get(
+            CONF_KITCHENOWL_SHOPPING_LIST_ID,
+            self.entry.data.get(CONF_KITCHENOWL_SHOPPING_LIST_ID),
+        )
+        if url and "://" not in url:
+            url = f"http://{url}"
+        if not url or not token or not list_id:
+            raise KitchenOwlError("KitchenOwl URL, token, and shopping list ID must be configured")
+        return KitchenOwlShoppingClient(self.hass, url, token, int(list_id))
+
+    async def async_add_to_shopping_list(
+        self,
+        name: str,
+        description: str = "",
+        *,
+        item_id: str | None = None,
+        quantity: int | float = 1,
+    ) -> dict[str, Any]:
+        """Send one explicit item request to the configured shopping-list target."""
+        item_name = self._normalize_optional(name)
+        item = await self.async_catalog_item(item_id) if item_id else None
+        item_name = item_name or (item or {}).get("label")
+        if not item_name:
+            raise ValueError("Shopping item name is required")
+        self._ensure_write_mode()
+        source_provider = (item or {}).get("provider")
+        target = self._shopping_target_for_product(source_provider)
+        if target == PROVIDER_GROCY and not item:
+            raise ValueError("Choose a Grocy catalog product before sending an item to Grocy shopping")
+        if target == PROVIDER_GROCY and source_provider != PROVIDER_GROCY:
+            raise ValueError("Only Grocy catalog products can be sent to Grocy shopping")
+        if target == PROVIDER_GROCY and item:
+            try:
+                result = await self._grocy_client().async_add_product_to_shopping_list(
+                    item["id"],
+                    quantity,
+                    note=description,
+                )
+            except GrocyCatalogError as err:
+                raise ValueError("Grocy shopping list is unavailable") from err
+            provider = PROVIDER_GROCY
+        else:
+            try:
+                result = await self._kitchenowl_client().async_add_item(item_name, description)
+            except KitchenOwlError:
+                raise
+            provider = PROVIDER_KITCHENOWL
+        self._add_log_entry(
+            "Shopping item added",
+            f"{item_name} was sent to {provider}.",
+            {"provider": provider, "item": item_name, "item_id": item_id},
+        )
+        await self.async_save()
+        return result
+
+    async def async_add_empty_containers_to_shopping_list(self) -> int:
+        """Send unique product labels from empty containers to the configured shopping target."""
+        requests: list[tuple[str, str | None, str | None]] = []
+        seen: set[tuple[str, str | None]] = set()
+        for container in self.active_containers():
+            if float(container.get("canonical_quantity", container.get("quantity", 0))) != 0:
+                continue
+            product = self.product_for_container(container) or {}
+            source = product.get("source") or {}
+            label = self.item_label_for_container(container)
+            key = (label.casefold(), source.get("id"))
+            if label and key not in seen:
+                seen.add(key)
+                requests.append((label, source.get("provider"), source.get("id")))
+        if not requests:
+            return 0
+        self._ensure_write_mode()
+        sent = 0
+        kitchenowl_client: KitchenOwlShoppingClient | None = None
+        grocy_client: GrocyCatalogClient | None = None
+        for label, source_provider, source_id in requests:
+            target = self._shopping_target_for_product(source_provider)
+            if target == PROVIDER_GROCY and source_provider == PROVIDER_GROCY and source_id:
+                grocy_client = grocy_client or self._grocy_client()
+                await grocy_client.async_add_product_to_shopping_list(
+                    source_id,
+                    note="Added from empty Mise en Place Assistant containers",
+                )
+            else:
+                kitchenowl_client = kitchenowl_client or self._kitchenowl_client()
+                await kitchenowl_client.async_add_item(label, "Added from empty Mise en Place Assistant containers")
+            sent += 1
+        self._add_log_entry(
+            "Empty containers queued",
+            f"{sent} empty-container items were sent to the configured shopping list.",
+            {"provider": self.shopping_list_provider(), "items": [label for label, _, _ in requests]},
+        )
+        await self.async_save()
+        return sent
+
+    async def async_add_missing_products_to_shopping_list(self) -> dict[str, Any]:
+        """Ask Grocy to add products below minimum stock to its shopping list."""
+        self._ensure_write_mode()
+        if self.shopping_list_provider() == PROVIDER_KITCHENOWL:
+            raise ValueError("Grocy minimum-stock shopping requires Grocy or automatic shopping-list mode")
+        try:
+            result = await self._grocy_client().async_add_missing_products_to_shopping_list()
+        except GrocyCatalogError as err:
+            raise ValueError("Grocy shopping list is unavailable") from err
+        self._add_log_entry(
+            "Missing products queued",
+            "Grocy added products below minimum stock to its shopping list.",
+            {"provider": PROVIDER_GROCY},
+        )
+        await self.async_save()
+        return result
+
+    def _shopping_target_for_product(self, source_provider: str | None) -> str:
+        """Choose the shopping target for a product-backed or free-text request."""
+        preference = self.shopping_list_provider()
+        if preference != SHOPPING_LIST_PROVIDER_AUTO:
+            return preference
+        if source_provider == PROVIDER_GROCY:
+            return PROVIDER_GROCY
+        if self.kitchenowl_configured():
+            return PROVIDER_KITCHENOWL
+        return PROVIDER_GROCY
+
+    def shopping_workflow_status(self) -> dict[str, Any]:
+        """Return dashboard-facing shopping workflow ownership and capability status."""
+        preference = self.shopping_list_provider()
+        return {
+            "provider": preference,
+            "grocy_configured": self.grocy_configured(),
+            "kitchenowl_configured": self.kitchenowl_configured(),
+            "product_backed_target": self._shopping_target_for_product(PROVIDER_GROCY),
+            "free_text_target": self._shopping_target_for_product(None),
+            "grocy_minimum_stock": preference in {SHOPPING_LIST_PROVIDER_AUTO, PROVIDER_GROCY},
+        }
 
     async def async_save(self, *, notify: bool = True) -> None:
         await self._store.async_save(self.data)
@@ -525,7 +1467,7 @@ class MiseEnPlaceAssistantInventory:
             self.hass.bus.async_fire(EVENT_MISE_EN_PLACE_ASSISTANT_UPDATED, {})
 
     def item_totals(self, *, include_empty: bool = True) -> dict[str, dict[str, Any]]:
-        """Return totals for filled containers, grouped by stable local product ID."""
+        """Return product totals from Grocy stock when Grocy owns the product."""
         totals: dict[str, dict[str, Any]] = {
             key: {
                 "product_id": key, "item_id": item.get("source", {}).get("id"), "label": item.get("label") or key,
@@ -535,13 +1477,47 @@ class MiseEnPlaceAssistantInventory:
             }
             for key, item in self.products.items()
         } if include_empty else {}
-        for container in self.containers.values():
+        stock_by_source = {row.get("id"): row for row in self.data.get("stock", []) if isinstance(row, dict)}
+        for product_id, product in self.products.items():
+            source = product.get("source") or {}
+            if source.get("provider") != PROVIDER_GROCY:
+                continue
+            stock = stock_by_source.get(source.get("id"))
+            if not stock and not include_empty:
+                continue
+            total = totals.setdefault(
+                product_id,
+                {
+                    "product_id": product_id,
+                    "item_id": source.get("id"),
+                    "label": product.get("label") or product_id,
+                    "unit": product.get("unit") or DEFAULT_UNIT,
+                    "quantity": 0,
+                    "quantities": {},
+                    "containers": 0,
+                    "locations": {},
+                },
+            )
+            quantity = stock.get("quantity", 0) if stock else 0
+            total.update(
+                {
+                    "unit": product.get("unit") or DEFAULT_UNIT,
+                    "quantity": quantity,
+                    "quantities": {product.get("unit") or DEFAULT_UNIT: quantity},
+                    "source": "grocy",
+                }
+            )
+        for container in self.active_containers():
             product_id = container.get("product_id")
             if not product_id:
                 continue
+            product = self.products.get(product_id, {})
+            if (product.get("source") or {}).get("provider") == PROVIDER_GROCY:
+                if product_id in totals:
+                    totals[product_id]["containers"] = totals[product_id].get("containers", 0) + 1
+                continue
             if float(container.get("canonical_quantity", container.get("quantity", 0))) <= 0:
                 continue
-            product = self.products.get(product_id, {})
             total = totals.setdefault(product_id, {"product_id": product_id, "item_id": product.get("source", {}).get("id"), "label": product.get("label") or container.get("item_label") or product_id, "unit": None, "quantity": None, "quantities": {}, "containers": 0, "locations": {}})
             unit = container.get("canonical_unit", container.get("unit")) or DEFAULT_UNIT
             amount = container.get("canonical_quantity", container.get("quantity", 0))
@@ -561,7 +1537,7 @@ class MiseEnPlaceAssistantInventory:
     def meal_inventory(self) -> dict[str, Any]:
         """Sum ready meals by Mealie's configured yield unit."""
         components: dict[str, dict[str, Any]] = {}
-        for container in self.containers.values():
+        for container in self.active_containers():
             if container.get("content_kind") != "meal":
                 continue
             amount = float(container.get("canonical_quantity", container.get("quantity", 0)))
@@ -652,7 +1628,7 @@ class MiseEnPlaceAssistantInventory:
     def item_label_for_container(self, container: dict[str, Any]) -> str:
         """Prefer Mealie's current name for a catalog-linked container."""
         product = self.product_for_container(container)
-        if product and (product.get("source") or {}).get("provider") in {PROVIDER_MEALIE, PROVIDER_MOCKED}:
+        if product and (product.get("source") or {}).get("provider") in {PROVIDER_GROCY, PROVIDER_MEALIE, PROVIDER_MOCKED}:
             return product.get("label") or container.get("item_label") or "No current item"
         return container.get("item_label") or "No current item"
 
@@ -664,10 +1640,10 @@ class MiseEnPlaceAssistantInventory:
         return {"product_id": product["id"], "label": product["label"], "source": dict(product.get("source") or {})}
 
     def location_count(self, location_key: str) -> int:
-        location = self.locations.get(location_key)
+        location = self.locations.get(location_key) or self.location_for_id(location_key)
         if not location:
             return 0
-        return sum(1 for container in self.containers.values() if container.get("location") == location["name"])
+        return sum(1 for container in self.active_containers() if container.get("location_id") == location["id"])
 
     @staticmethod
     def _normalize_tag_id(tag_id: str) -> str:

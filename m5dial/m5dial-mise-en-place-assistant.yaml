@@ -42,7 +42,8 @@ api:
         incoming_item_labels: string[]
         incoming_item_formats: string[]
         incoming_item_units: string[]
-        incoming_locations: string[]
+        incoming_location_ids: string[]
+        incoming_location_labels: string[]
       then:
         - lambda: |-
             id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id;
@@ -54,12 +55,13 @@ api:
               id(item_labels) = incoming_item_labels;
               id(item_formats) = incoming_item_formats;
               id(item_units) = incoming_item_units;
-              id(locations) = incoming_locations;
+              id(location_ids) = incoming_location_ids;
+              id(locations) = incoming_location_labels;
               id(selected_item_index) = 0;
               id(selected_location_index) = 0;
               id(inventory_qty) = 0;
               id(current_view) = 10;
-              ESP_LOGI("mise_en_place_assistant", "Create flow loaded: tag=%s items=%d locations=%d", tag_id.c_str(), (int) incoming_item_labels.size(), (int) incoming_locations.size());
+              ESP_LOGI("mise_en_place_assistant", "Create flow loaded: tag=%s items=%d locations=%d", tag_id.c_str(), (int) incoming_item_labels.size(), (int) incoming_location_labels.size());
             }
         - if:
             condition:
@@ -76,8 +78,10 @@ api:
         item_format: string
         quantity: float
         unit: string
-        location: string
-        incoming_locations: string[]
+        location_id: string
+        location_label: string
+        incoming_location_ids: string[]
+        incoming_location_labels: string[]
       then:
         - lambda: |-
             id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id;
@@ -88,18 +92,20 @@ api:
               id(selected_item_label) = item_label;
               id(selected_item_format) = item_format;
               id(selected_item_unit) = unit;
-              id(selected_location_label) = location;
-              id(locations) = incoming_locations;
+              id(selected_location_id) = location_id;
+              id(selected_location_label) = location_label;
+              id(location_ids) = incoming_location_ids;
+              id(locations) = incoming_location_labels;
               id(selected_location_index) = 0;
               for (int i = 0; i < (int) id(locations).size(); i++) {
-                if (id(locations)[i] == location) {
+                if (id(location_ids)[i] == location_id) {
                   id(selected_location_index) = i;
                   break;
                 }
               }
               id(inventory_qty) = quantity;
               id(current_view) = 20;
-              ESP_LOGI("mise_en_place_assistant", "Known flow loaded: tag=%s item=%s quantity=%g location=%s choices=%d", tag_id.c_str(), item_label.c_str(), quantity, location.c_str(), (int) incoming_locations.size());
+              ESP_LOGI("mise_en_place_assistant", "Known flow loaded: tag=%s item=%s quantity=%g location=%s choices=%d", tag_id.c_str(), item_label.c_str(), quantity, location_label.c_str(), (int) incoming_location_labels.size());
             }
         - if:
             condition:
@@ -669,6 +675,10 @@ globals:
     type: std::vector<std::string>
     initial_value: "std::vector<std::string>()"
 
+  - id: location_ids
+    type: std::vector<std::string>
+    initial_value: "std::vector<std::string>()"
+
   - id: selected_item_index
     type: int
     initial_value: "0"
@@ -694,6 +704,10 @@ globals:
     initial_value: '"items"'
 
   - id: selected_location_label
+    type: std::string
+    initial_value: '""'
+
+  - id: selected_location_id
     type: std::string
     initial_value: '""'
 
@@ -1053,7 +1067,7 @@ script:
                   item_format: !lambda 'return id(selected_item_format);'
                   unit: !lambda 'return id(selected_item_unit);'
                   quantity: !lambda 'return std::to_string(id(inventory_qty));'
-                  location: !lambda 'return id(selected_location_label);'
+                  location_id: !lambda 'return id(selected_location_id);'
                   source: "${device_name}"
 
       - if:
@@ -1080,7 +1094,7 @@ script:
                 data:
                   tag_id: !lambda 'return id(last_tag_id);'
                   quantity: !lambda 'return std::to_string(id(inventory_qty));'
-                  location: !lambda 'return id(selected_location_label);'
+                  location_id: !lambda 'return id(selected_location_id);'
                   source: "${device_name}"
 
       - if:
@@ -1135,6 +1149,9 @@ script:
             if (id(selected_location_index) < 0) id(selected_location_index) = 0;
             if (id(selected_location_index) >= (int) id(locations).size()) id(selected_location_index) = id(locations).size() - 1;
             id(selected_location_label) = id(locations)[id(selected_location_index)];
+            if (id(selected_location_index) < (int) id(location_ids).size()) {
+              id(selected_location_id) = id(location_ids)[id(selected_location_index)];
+            }
           }
           ESP_LOGD("mise_en_place_assistant", "Selection synced: item=%s location=%s qty=%g", id(selected_item_label).c_str(), id(selected_location_label).c_str(), id(inventory_qty));
 

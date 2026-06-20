@@ -9,7 +9,13 @@
           "m5dial_service_prefix": "M5Dial ESPHome action prefix",
           "m5dial_device_id": "Enrolled M5Dial",
           "m5dial_event_source": "M5Dial event source",
-          "catalog_provider": "Food catalog provider"
+          "catalog_provider": "Food catalog provider",
+          "catalog_providers": "Food catalog providers",
+          "dev_mode": "DEV mode",
+          "shopping_list_provider": "Shopping list provider",
+          "kitchenowl_url": "KitchenOwl URL",
+          "kitchenowl_token": "KitchenOwl long-lived access token",
+          "kitchenowl_shopping_list_id": "KitchenOwl shopping list ID"
         }
       },
       "mealie_entry": {
@@ -26,13 +32,27 @@
           "mealie_url": "Mealie URL",
           "mealie_token": "Mealie API token"
         }
+      },
+      "grocy_manual": {
+        "title": "Connect Grocy",
+        "description": "Enter Grocy connection details for product data.",
+        "data": {
+          "grocy_url": "Grocy URL",
+          "grocy_token": "Grocy API key",
+          "shopping_list_provider": "Shopping list provider",
+          "kitchenowl_url": "KitchenOwl URL",
+          "kitchenowl_token": "KitchenOwl long-lived access token",
+          "kitchenowl_shopping_list_id": "KitchenOwl shopping list ID"
+        }
       }
     },
     "abort": {
       "single_instance_allowed": "Mise en Place Assistant is already configured."
     },
     "error": {
-      "invalid_mealie_connection": "Enter a valid Mealie URL and API token."
+      "invalid_mealie_connection": "Enter a valid Mealie URL and API token.",
+      "invalid_provider_connection": "Enter valid credentials for each selected live provider.",
+      "provider_required": "Choose a data provider or enable DEV mode for mock data."
     }
   },
   "options": {
@@ -46,12 +66,22 @@
           "m5dial_device_id": "Enrolled M5Dial",
           "m5dial_event_source": "M5Dial event source",
           "catalog_provider": "Food catalog provider",
+          "catalog_providers": "Food catalog providers",
+          "dev_mode": "DEV mode",
           "mealie_url": "Mealie URL",
-          "mealie_token": "Mealie API token"
+          "mealie_token": "Mealie API token",
+          "grocy_url": "Grocy URL",
+          "grocy_token": "Grocy API key",
+          "shopping_list_provider": "Shopping list provider",
+          "kitchenowl_url": "KitchenOwl URL",
+          "kitchenowl_token": "KitchenOwl long-lived access token",
+          "kitchenowl_shopping_list_id": "KitchenOwl shopping list ID"
         }
       },
       "error": {
-        "invalid_mealie_connection": "Enter a valid Mealie URL and API token."
+        "invalid_mealie_connection": "Enter a valid Mealie URL and API token.",
+        "invalid_provider_connection": "Enter valid credentials for each selected live provider.",
+        "provider_required": "Choose a data provider or enable DEV mode for mock data."
       }
     }
   },

@@ -12,8 +12,9 @@ from aiohttp import web
 from homeassistant.components import frontend, panel_custom, websocket_api
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import area_registry as ar
 
-from .const import DOMAIN, PANEL_URL_PATH
+from .const import DOMAIN, PANEL_URL_PATH, VOID_LOCATION_ID
 from .store import MiseEnPlaceAssistantInventory
 
 _LOGGER = logging.getLogger(__name__)
@@ -136,20 +137,52 @@ def _manager(hass: HomeAssistant) -> MiseEnPlaceAssistantInventory:
 
 def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
     """Build practical overview data for the panel."""
+    active_containers = manager.active_containers()
+    archived_containers = [
+        container for container in manager.containers.values() if container.get("archived")
+    ]
     containers = sorted(
-        manager.containers.values(),
+        active_containers,
         key=lambda container: container.get("updated_at") or "",
         reverse=True,
     )
-    locations = [
-        {
-            "name": location["name"],
-            "containers": manager.location_count(location_key),
-        }
-        for location_key, location in sorted(
-            manager.locations.items(), key=lambda item: item[1]["name"].casefold()
-        )
+    areas = ar.async_get(manager.hass)
+    area_entries = (
+        areas.async_list_areas()
+        if hasattr(areas, "async_list_areas")
+        else getattr(areas, "areas", {}).values()
+    )
+    area_options = [
+        {"id": area.id, "name": area.name}
+        for area in sorted(area_entries, key=lambda area: area.name.casefold())
     ]
+    locations = []
+    for location in manager.storage_locations():
+        area = areas.async_get_area(location.get("area_id")) if location.get("area_id") else None
+        locations.append(
+            {
+                **location,
+                "containers": manager.location_count(location["id"]),
+                "area_name": area.name if area else None,
+                "health": manager.location_health(location),
+            }
+        )
+    void_count = manager.location_count(VOID_LOCATION_ID)
+    if void_count:
+        locations.append(
+            {
+                "id": VOID_LOCATION_ID,
+                "name": "The Void",
+                "location_type": "system",
+                "editable": False,
+                "containers": void_count,
+                "health": {
+                    "status": "warning",
+                    "problems": ["Containers need a location"],
+                    "readings": {},
+                },
+            }
+        )
     empty_containers = [
         _container_summary(container, manager)
         for container in containers
@@ -167,16 +200,21 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
     return {
         "summary": {
             "containers": len(containers),
-            "locations": len(manager.locations),
+            "locations": len(locations),
             "items": len(item_totals),
             "empty": len(empty_containers),
             "low": len(low_containers),
+            "archived": len(archived_containers),
         },
         "containers": [_container_summary(container, manager) for container in containers],
+        "archived_containers": [_container_summary(container, manager) for container in archived_containers],
         "items": item_totals,
         "foods": manager.catalog_items(),
+        "product_attention": manager.product_attention_items(),
         "recipes": manager.recipe_items(),
         "meal_inventory": manager.meal_inventory(),
+        "shopping": manager.shopping_workflow_status(),
+        "areas": area_options,
         "locations": locations,
         "empty_containers": empty_containers[:8],
         "low_containers": low_containers[:8],
@@ -196,8 +234,14 @@ def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantI
         "unit": container.get("unit") or "items",
         "canonical_quantity": container.get("canonical_quantity", container.get("quantity", 0)),
         "canonical_unit": container.get("canonical_unit", container.get("unit")) or "items",
+        "location_id": container.get("location_id") or "",
         "location": container.get("location") or "Unassigned",
         "content_kind": container.get("content_kind") or "empty",
+        "best_before_date": container.get("best_before_date") or "",
+        "purchased_date": container.get("purchased_date") or "",
+        "opened_date": container.get("opened_date") or "",
+        "archived": bool(container.get("archived")),
+        "archived_at": container.get("archived_at") or "",
         "updated_at": container.get("updated_at") or "",
         "created_at": container.get("created_at") or "",
     }

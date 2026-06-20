@@ -1,6 +1,104 @@
 create_location:
+  description: Storage locations are created in Grocy; this retained service reports that boundary.
   fields:
     name:
+      required: true
+      selector:
+        text:
+    location_type:
+      selector:
+        select:
+          options:
+            - fridge
+            - freezer
+            - pantry
+            - dry_storage
+            - cellar
+            - counter
+            - other
+    area_id:
+      selector:
+        text:
+    sensors:
+      description: Mapping of temperature, humidity, door, power, energy, or power_switch roles to Home Assistant entity IDs.
+      selector:
+        object:
+    monitoring:
+      description: Optional thresholds such as temperature_min, temperature_max, and power_required.
+      selector:
+        object:
+
+update_location:
+  description: Add or update Home Assistant monitoring metadata for a Grocy storage location.
+  fields:
+    location_id:
+      required: true
+      selector:
+        text:
+    name:
+      required: true
+      selector:
+        text:
+    location_type:
+      selector:
+        select:
+          options:
+            - fridge
+            - freezer
+            - pantry
+            - dry_storage
+            - cellar
+            - counter
+            - other
+    area_id:
+      selector:
+        text:
+    sensors:
+      selector:
+        object:
+    monitoring:
+      selector:
+        object:
+
+delete_location:
+  description: Remove local monitoring metadata for a Grocy storage location; the Grocy location remains.
+  fields:
+    location_id:
+      required: true
+      selector:
+        text:
+
+move_container:
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+    location_id:
+      required: true
+      selector:
+        text:
+
+clear_container:
+  description: Empty a live container while preserving its NFC identity and product attribution.
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+
+archive_container:
+  description: Retire an empty container from active inventory without deleting its history.
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+
+restore_container:
+  description: Return an archived container to active inventory.
+  fields:
+    tag_id:
       required: true
       selector:
         text:
@@ -24,10 +122,32 @@ create_container:
     location:
       selector:
         text:
+    location_id:
+      selector:
+        text:
     item_id:
       required: true
       selector:
         text:
+    best_before_date:
+      description: Optional Grocy best-before date for the added stock, formatted as YYYY-MM-DD.
+      selector:
+        text:
+    purchased_date:
+      description: Optional Grocy purchase date for the added stock, formatted as YYYY-MM-DD.
+      selector:
+        text:
+    opened_date:
+      description: Optional Grocy opened date for the added stock, formatted as YYYY-MM-DD.
+      selector:
+        text:
+    price:
+      description: Optional Grocy stock price for this purchase/addition.
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
 
 update_container:
   fields:
@@ -52,18 +172,34 @@ update_container:
     location:
       selector:
         text:
+    location_id:
+      selector:
+        text:
     unit:
       selector:
         text:
     item_id:
       selector:
         text:
-    item_label:
+    best_before_date:
+      description: Optional Grocy best-before date for newly added stock, formatted as YYYY-MM-DD.
       selector:
         text:
-    item_format:
+    purchased_date:
+      description: Optional Grocy purchase date for newly added stock, formatted as YYYY-MM-DD.
       selector:
         text:
+    opened_date:
+      description: Optional Grocy opened date for newly added stock, formatted as YYYY-MM-DD.
+      selector:
+        text:
+    price:
+      description: Optional Grocy stock price for this purchase/addition.
+      selector:
+        number:
+          min: 0
+          step: any
+          mode: box
 
 create_recipe_container:
   fields:
@@ -90,6 +226,9 @@ create_recipe_container:
           step: any
           mode: box
     location:
+      selector:
+        text:
+    location_id:
       selector:
         text:
 
@@ -142,14 +281,85 @@ scan_container:
             - add
             - remove
 
-mark_container_clean:
-  name: Mark container clean
-  description: Record that a washed, tagged container is clean and ready for storage.
+add_to_shopping_list:
+  description: Add one explicit item to the preferred shopping list; Grocy-backed products can be sent to Grocy, while KitchenOwl remains supported for users who prefer it.
   fields:
-    tag_id:
-      required: true
+    name:
+      description: Free-text item name, or fallback label when item_id is supplied.
       selector:
         text:
-    location:
+    description:
+      selector:
+        text:
+    item_id:
+      description: Optional catalog product ID. Grocy-backed products preserve product identity in Grocy shopping lists.
+      selector:
+        text:
+    quantity:
+      default: 1
+      selector:
+        number:
+          min: 0.000001
+          step: any
+          mode: box
+
+add_empty_containers_to_shopping_list:
+  description: Add unique product labels from empty containers to the preferred shopping list, preserving Grocy product identity where possible and retaining KitchenOwl support.
+  fields: {}
+
+add_missing_products_to_shopping_list:
+  description: Ask Grocy to add products below their configured minimum stock to Grocy's shopping list.
+  fields: {}
+
+update_product_metadata:
+  description: Store Home Assistant-owned Mise workflow metadata for a Grocy or DEV-mode mocked product.
+  fields:
+    item_id:
+      required: true
+      description: Catalog product ID from the configured provider.
+      selector:
+        text:
+    container_policy:
+      required: true
+      description: How this product is normally handled by Mise container workflows.
+      selector:
+        select:
+          options:
+            - container
+            - original_packaging
+            - either
+            - no_container
+            - unknown
+    storage_behavior:
+      required: true
+      description: Mise storage expectation for review and filtering; Grocy remains the storage-location source.
+      selector:
+        select:
+          options:
+            - fridge
+            - freezer
+            - pantry
+            - dry_storage
+            - cellar
+            - counter
+            - unknown
+    meal_role:
+      required: true
+      description: How this product should appear in Mise meal-planning workflows.
+      selector:
+        select:
+          options:
+            - ingredient
+            - staple
+            - condiment
+            - prepared_component
+            - ignore
+            - unknown
+    available_in_mealie:
+      required: true
+      description: Whether Mise should sync this Grocy product into Mealie Foods for recipe ingredient selection.
+      selector:
+        boolean:
+    notes:
       selector:
         text:

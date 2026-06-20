@@ -39,8 +39,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             known_entities.update(entity.entity_key for entity in new_entities)
             async_add_entities(new_entities)
 
-    add_entities([entity for tag_id in manager.containers for entity in container_entity(tag_id)])
-    add_entities([entity for key in manager.locations for entity in location_entity(key)])
+    add_entities([entity for tag_id, container in manager.containers.items() if not container.get("archived") for entity in container_entity(tag_id)])
+    add_entities([entity for location in manager.storage_locations() for entity in location_entity(location["id"])])
     add_entities([entity for product_id in manager.products for entity in product_entity(product_id)])
 
     @callback
@@ -107,12 +107,18 @@ class MiseEnPlaceAssistantContainerStatusSensor(MiseEnPlaceAssistantBaseSensor):
             "item_label": container.get("item_label"),
             "item_format": container.get("item_format"),
             "content_kind": container.get("content_kind"),
+            "archived": bool(container.get("archived")),
+            "archived_at": container.get("archived_at"),
             "quantity": container.get("quantity", 0),
             "unit": container.get("unit"),
             "canonical_quantity": container.get("canonical_quantity", container.get("quantity", 0)),
             "canonical_unit": container.get("canonical_unit", container.get("unit")),
             "unit_dimension": container.get("unit_dimension"),
             "location": container.get("location"),
+            "location_id": container.get("location_id"),
+            "best_before_date": container.get("best_before_date"),
+            "purchased_date": container.get("purchased_date"),
+            "opened_date": container.get("opened_date"),
             "updated_at": container.get("updated_at"),
         }
 
@@ -184,8 +190,14 @@ class MiseEnPlaceAssistantLocationSensor(MiseEnPlaceAssistantBaseSensor):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        return {"location": self.location.get("name"), "created_at": self.location.get("created_at")}
+        location = self.location
+        return {
+            "location_id": location.get("id"), "location": location.get("name"),
+            "location_type": location.get("location_type"), "area_id": location.get("area_id"),
+            "sensors": location.get("sensors", {}), "monitoring": location.get("monitoring", {}),
+            "health": self.manager.location_health(location), "created_at": location.get("created_at"),
+        }
 
     @property
     def location(self) -> dict[str, Any]:
-        return self.manager.locations.get(self.location_key, {})
+        return self.manager.location_for_id(self.location_key) or {}

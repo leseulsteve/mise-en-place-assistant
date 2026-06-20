@@ -27,13 +27,30 @@ from .const import (
     EVENT_INVENTORY_CONFIRM,
     PLATFORMS,
     SERVICE_CREATE_CONTAINER,
+    SERVICE_ARCHIVE_CONTAINER,
+    SERVICE_CLEAR_CONTAINER,
+    SERVICE_ADD_EMPTY_CONTAINERS_TO_SHOPPING_LIST,
+    SERVICE_ADD_MISSING_PRODUCTS_TO_SHOPPING_LIST,
+    SERVICE_ADD_TO_SHOPPING_LIST,
+    SERVICE_UPDATE_PRODUCT_METADATA,
     SERVICE_CREATE_RECIPE_CONTAINER,
     SERVICE_CREATE_LOCATION,
+    SERVICE_DELETE_LOCATION,
+    SERVICE_MOVE_CONTAINER,
+    SERVICE_UPDATE_LOCATION,
     SERVICE_FILL_CONTAINER,
     SERVICE_REMOVE_ITEMS,
+    SERVICE_RESTORE_CONTAINER,
     SERVICE_SCAN_CONTAINER,
     SERVICE_UPDATE_CONTAINER,
+    PROVIDER_MOCKED,
+    LOCATION_TYPES,
+    PRODUCT_CONTAINER_POLICIES,
+    PRODUCT_MEAL_ROLES,
+    PRODUCT_STORAGE_BEHAVIORS,
 )
+from .grocy import GrocyCatalogError
+from .kitchenowl import KitchenOwlError
 from .panel import async_register_panel, async_unregister_panel
 from .mealie import MealieCatalogError
 from .store import MiseEnPlaceAssistantInventory
@@ -50,6 +67,21 @@ ATTR_UNIT = "unit"
 ATTR_ITEM_ID = "item_id"
 ATTR_RECIPE_ID = "recipe_id"
 ATTR_CONTENT_KIND = "content_kind"
+ATTR_LOCATION_ID = "location_id"
+ATTR_LOCATION_TYPE = "location_type"
+ATTR_AREA_ID = "area_id"
+ATTR_SENSORS = "sensors"
+ATTR_MONITORING = "monitoring"
+ATTR_DESCRIPTION = "description"
+ATTR_BEST_BEFORE_DATE = "best_before_date"
+ATTR_PURCHASED_DATE = "purchased_date"
+ATTR_OPENED_DATE = "opened_date"
+ATTR_PRICE = "price"
+ATTR_CONTAINER_POLICY = "container_policy"
+ATTR_STORAGE_BEHAVIOR = "storage_behavior"
+ATTR_MEAL_ROLE = "meal_role"
+ATTR_AVAILABLE_IN_MEALIE = "available_in_mealie"
+ATTR_NOTES = "notes"
 
 SCAN_MODES = ["set", "add", "remove"]
 
@@ -92,13 +124,93 @@ def _manager(hass: HomeAssistant) -> MiseEnPlaceAssistantInventory:
     return next(iter(domain_data.values()))
 
 
+def _location_data(call: ServiceCall) -> dict:
+    """Extract validated configuration that belongs to a location."""
+    sensors = call.data.get(ATTR_SENSORS, {})
+    if not isinstance(sensors, dict):
+        raise ServiceValidationError("sensors must be an object")
+    allowed_roles = {"temperature", "humidity", "door", "power", "energy", "power_switch"}
+    for role, entity_id in sensors.items():
+        if role not in allowed_roles or not isinstance(entity_id, str) or "." not in entity_id:
+            raise ServiceValidationError("Invalid location sensor association")
+        domain = entity_id.split(".", 1)[0]
+        if role == "door" and domain != "binary_sensor":
+            raise ServiceValidationError("door must reference a binary_sensor entity")
+        if role == "power_switch" and domain != "switch":
+            raise ServiceValidationError("power_switch must reference a switch entity")
+        if role not in {"door", "power_switch"} and domain != "sensor":
+            raise ServiceValidationError(f"{role} must reference a sensor entity")
+    monitoring = call.data.get(ATTR_MONITORING, {})
+    if not isinstance(monitoring, dict):
+        raise ServiceValidationError("monitoring must be an object")
+    for key in ("temperature_min", "temperature_max"):
+        if key in monitoring:
+            monitoring[key] = _finite_number(monitoring[key])
+    return {
+        "name": call.data.get(ATTR_NAME),
+        "location_type": call.data.get(ATTR_LOCATION_TYPE, "other"),
+        "area_id": call.data.get(ATTR_AREA_ID),
+        "sensors": sensors,
+        "monitoring": monitoring,
+    }
+
+
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up Mise en Place Assistant services."""
 
     async def handle_create_location(call: ServiceCall) -> None:
         manager = _manager(hass)
-        _LOGGER.info("Creating Mise en Place Assistant location: %s", call.data[ATTR_NAME])
-        await manager.async_create_location(call.data[ATTR_NAME])
+        try:
+            await manager.async_create_location_record(**_location_data(call))
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def handle_update_location(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_update_location(call.data[ATTR_LOCATION_ID], **_location_data(call))
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def handle_delete_location(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_delete_location(call.data[ATTR_LOCATION_ID])
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def handle_move_container(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_update_container(
+                tag_id=call.data[ATTR_TAG_ID], location_id=call.data[ATTR_LOCATION_ID]
+            )
+        except (KeyError, ValueError) as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def handle_clear_container(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_clear_container(call.data[ATTR_TAG_ID])
+        except (KeyError, ValueError) as err:
+            raise ServiceValidationError(
+                f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
+            ) from err
+
+    async def handle_archive_container(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_archive_container(call.data[ATTR_TAG_ID])
+        except (KeyError, ValueError) as err:
+            raise ServiceValidationError(
+                f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
+            ) from err
+
+    async def handle_restore_container(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_restore_container(call.data[ATTR_TAG_ID])
+        except (KeyError, ValueError) as err:
+            raise ServiceValidationError(
+                f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
+            ) from err
 
     async def handle_create_container(call: ServiceCall) -> None:
         manager = _manager(hass)
@@ -107,16 +219,22 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         except (MealieCatalogError, ValueError) as err:
             raise ServiceValidationError(str(err)) from err
         _LOGGER.info(
-            "Creating Mise en Place Assistant container from service: tag_id=%s item_id=%s quantity=%s location=%s",
+            "Creating Mise en Place Assistant container from service: tag_id=%s item_id=%s quantity=%s location=%s location_id=%s",
             call.data[ATTR_TAG_ID], call.data.get(ATTR_ITEM_ID),
             call.data.get(ATTR_QUANTITY, 0), call.data.get(ATTR_LOCATION),
+            call.data.get(ATTR_LOCATION_ID),
         )
         try:
             await manager.async_create_container(
                 tag_id=call.data[ATTR_TAG_ID], name=call.data.get(ATTR_NAME),
                 quantity=call.data.get(ATTR_QUANTITY, 0), location=call.data.get(ATTR_LOCATION),
+                location_id=call.data.get(ATTR_LOCATION_ID),
                 unit=item["unit"], item_id=item["id"], item_label=item["label"],
-                item_format=item["format"], source_provider=manager.catalog_provider(),
+                item_format=item["format"], source_provider=item.get("provider", manager.catalog_provider()),
+                best_before_date=call.data.get(ATTR_BEST_BEFORE_DATE),
+                purchased_date=call.data.get(ATTR_PURCHASED_DATE),
+                opened_date=call.data.get(ATTR_OPENED_DATE),
+                price=call.data.get(ATTR_PRICE),
             )
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
@@ -129,6 +247,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 content_kind=call.data[ATTR_CONTENT_KIND],
                 tag_id=call.data[ATTR_TAG_ID], name=call.data.get(ATTR_NAME),
                 quantity=call.data.get(ATTR_QUANTITY, 0), location=call.data.get(ATTR_LOCATION),
+                location_id=call.data.get(ATTR_LOCATION_ID),
             )
         except (MealieCatalogError, ValueError) as err:
             raise ServiceValidationError(str(err)) from err
@@ -142,11 +261,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             except (MealieCatalogError, ValueError) as err:
                 raise ServiceValidationError(str(err)) from err
         _LOGGER.info(
-            "Updating Mise en Place Assistant container from service: tag_id=%s quantity=%s delta=%s location=%s",
+            "Updating Mise en Place Assistant container from service: tag_id=%s quantity=%s delta=%s location=%s location_id=%s",
             call.data[ATTR_TAG_ID],
             call.data.get(ATTR_QUANTITY),
             call.data.get(ATTR_DELTA),
             call.data.get(ATTR_LOCATION),
+            call.data.get(ATTR_LOCATION_ID),
         )
         try:
             await manager.async_update_container(
@@ -154,12 +274,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 quantity=call.data.get(ATTR_QUANTITY),
                 delta=call.data.get(ATTR_DELTA),
                 location=call.data.get(ATTR_LOCATION),
+                location_id=call.data.get(ATTR_LOCATION_ID),
                 name=call.data.get(ATTR_NAME),
                 unit=call.data.get(ATTR_UNIT) or (item or {}).get("unit"),
                 item_id=(item or {}).get("id"),
                 item_label=(item or {}).get("label"),
                 item_format=(item or {}).get("format"),
-                source_provider=manager.catalog_provider() if item else "local",
+                source_provider=item.get("provider", manager.catalog_provider()) if item else "local",
+                best_before_date=call.data.get(ATTR_BEST_BEFORE_DATE),
+                purchased_date=call.data.get(ATTR_PURCHASED_DATE),
+                opened_date=call.data.get(ATTR_OPENED_DATE),
+                price=call.data.get(ATTR_PRICE),
             )
         except (KeyError, ValueError) as err:
             raise ServiceValidationError(
@@ -179,9 +304,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 tag_id=call.data[ATTR_TAG_ID],
                 delta=call.data[ATTR_QUANTITY],
             )
-        except KeyError as err:
+        except (KeyError, ValueError) as err:
             raise ServiceValidationError(
                 f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
             ) from err
 
     async def handle_remove_items(call: ServiceCall) -> None:
@@ -196,9 +322,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 tag_id=call.data[ATTR_TAG_ID],
                 delta=-call.data[ATTR_QUANTITY],
             )
-        except KeyError as err:
+        except (KeyError, ValueError) as err:
             raise ServiceValidationError(
                 f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
             ) from err
 
     async def handle_scan_container(call: ServiceCall) -> None:
@@ -209,17 +336,117 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             call.data.get(ATTR_QUANTITY),
             call.data.get(ATTR_MODE, "set"),
         )
-        await manager.async_scan_container(
-            tag_id=call.data[ATTR_TAG_ID],
-            quantity=call.data.get(ATTR_QUANTITY),
-            mode=call.data.get(ATTR_MODE, "set"),
-        )
+        try:
+            await manager.async_scan_container(
+                tag_id=call.data[ATTR_TAG_ID],
+                quantity=call.data.get(ATTR_QUANTITY),
+                mode=call.data.get(ATTR_MODE, "set"),
+            )
+        except (KeyError, ValueError) as err:
+            raise ServiceValidationError(
+                f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
+            ) from err
+
+    async def handle_add_to_shopping_list(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_add_to_shopping_list(
+                call.data.get(ATTR_NAME, ""),
+                call.data.get(ATTR_DESCRIPTION, ""),
+                item_id=call.data.get(ATTR_ITEM_ID),
+                quantity=call.data.get(ATTR_QUANTITY, 1),
+            )
+        except (KitchenOwlError, ValueError, MealieCatalogError) as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def handle_add_empty_containers_to_shopping_list(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_add_empty_containers_to_shopping_list()
+        except (KitchenOwlError, GrocyCatalogError, ValueError) as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def handle_add_missing_products_to_shopping_list(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_add_missing_products_to_shopping_list()
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
+    async def handle_update_product_metadata(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_update_product_metadata(
+                call.data[ATTR_ITEM_ID],
+                container_policy=call.data.get(ATTR_CONTAINER_POLICY, "unknown"),
+                storage_behavior=call.data.get(ATTR_STORAGE_BEHAVIOR, "unknown"),
+                meal_role=call.data.get(ATTR_MEAL_ROLE, "unknown"),
+                available_in_mealie=call.data.get(ATTR_AVAILABLE_IN_MEALIE),
+                notes=call.data.get(ATTR_NOTES),
+            )
+        except (MealieCatalogError, ValueError) as err:
+            raise ServiceValidationError(str(err)) from err
 
     hass.services.async_register(
         DOMAIN,
         SERVICE_CREATE_LOCATION,
         handle_create_location,
-        schema=vol.Schema({vol.Required(ATTR_NAME): cv.string}),
+        schema=vol.Schema(
+            {
+                vol.Optional(ATTR_NAME, default=""): cv.string,
+                vol.Optional(ATTR_LOCATION_TYPE, default="other"): vol.In(LOCATION_TYPES),
+                vol.Optional(ATTR_AREA_ID): cv.string,
+                vol.Optional(ATTR_SENSORS, default={}): dict,
+                vol.Optional(ATTR_MONITORING, default={}): dict,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UPDATE_LOCATION,
+        handle_update_location,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_LOCATION_ID): cv.string,
+                vol.Optional(ATTR_NAME, default=""): cv.string,
+                vol.Optional(ATTR_LOCATION_TYPE, default="other"): vol.In(LOCATION_TYPES),
+                vol.Optional(ATTR_AREA_ID): cv.string,
+                vol.Optional(ATTR_SENSORS, default={}): dict,
+                vol.Optional(ATTR_MONITORING, default={}): dict,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_LOCATION,
+        handle_delete_location,
+        schema=vol.Schema({vol.Required(ATTR_LOCATION_ID): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_MOVE_CONTAINER,
+        handle_move_container,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_TAG_ID): cv.string,
+                vol.Required(ATTR_LOCATION_ID): cv.string,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CLEAR_CONTAINER,
+        handle_clear_container,
+        schema=vol.Schema({vol.Required(ATTR_TAG_ID): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ARCHIVE_CONTAINER,
+        handle_archive_container,
+        schema=vol.Schema({vol.Required(ATTR_TAG_ID): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_RESTORE_CONTAINER,
+        handle_restore_container,
+        schema=vol.Schema({vol.Required(ATTR_TAG_ID): cv.string}),
     )
     hass.services.async_register(
         DOMAIN,
@@ -233,6 +460,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_NAME): cv.string,
                 vol.Optional(ATTR_QUANTITY, default=0): _nonnegative_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
+                vol.Optional(ATTR_LOCATION_ID): cv.string,
             }
         ),
     )
@@ -246,7 +474,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_NAME): cv.string,
                 vol.Optional(ATTR_QUANTITY, default=0): _nonnegative_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
+                vol.Optional(ATTR_LOCATION_ID): cv.string,
                 vol.Required(ATTR_ITEM_ID): cv.string,
+                vol.Optional(ATTR_BEST_BEFORE_DATE): cv.string,
+                vol.Optional(ATTR_PURCHASED_DATE): cv.string,
+                vol.Optional(ATTR_OPENED_DATE): cv.string,
+                vol.Optional(ATTR_PRICE): _nonnegative_number,
             }
         ),
     )
@@ -261,8 +494,13 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_QUANTITY): _nonnegative_number,
                 vol.Optional(ATTR_DELTA): _finite_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
+                vol.Optional(ATTR_LOCATION_ID): cv.string,
                 vol.Optional(ATTR_UNIT): cv.string,
                 vol.Optional(ATTR_ITEM_ID): cv.string,
+                vol.Optional(ATTR_BEST_BEFORE_DATE): cv.string,
+                vol.Optional(ATTR_PURCHASED_DATE): cv.string,
+                vol.Optional(ATTR_OPENED_DATE): cv.string,
+                vol.Optional(ATTR_PRICE): _nonnegative_number,
             }
         ),
     )
@@ -300,6 +538,46 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             }
         ),
     )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_TO_SHOPPING_LIST,
+        handle_add_to_shopping_list,
+        schema=vol.Schema(
+            {
+                vol.Optional(ATTR_NAME, default=""): cv.string,
+                vol.Optional(ATTR_DESCRIPTION, default=""): cv.string,
+                vol.Optional(ATTR_ITEM_ID): cv.string,
+                vol.Optional(ATTR_QUANTITY, default=1): _positive_number,
+            }
+        ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_EMPTY_CONTAINERS_TO_SHOPPING_LIST,
+        handle_add_empty_containers_to_shopping_list,
+        schema=vol.Schema({}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_MISSING_PRODUCTS_TO_SHOPPING_LIST,
+        handle_add_missing_products_to_shopping_list,
+        schema=vol.Schema({}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_UPDATE_PRODUCT_METADATA,
+        handle_update_product_metadata,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_ITEM_ID): cv.string,
+                vol.Required(ATTR_CONTAINER_POLICY): vol.In(PRODUCT_CONTAINER_POLICIES),
+                vol.Required(ATTR_STORAGE_BEHAVIOR): vol.In(PRODUCT_STORAGE_BEHAVIORS),
+                vol.Required(ATTR_MEAL_ROLE): vol.In(PRODUCT_MEAL_ROLES),
+                vol.Required(ATTR_AVAILABLE_IN_MEALIE): cv.boolean,
+                vol.Optional(ATTR_NOTES, default=""): cv.string,
+            }
+        ),
+    )
     _LOGGER.debug("Registered Mise en Place Assistant services")
     return True
 
@@ -311,11 +589,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await manager.async_load()
     try:
         await manager.async_refresh_catalog()
+        await manager.async_validate_workflow_providers()
     except MealieCatalogError as err:
-        raise ConfigEntryNotReady("The selected catalog provider must be available before Mise en Place Assistant can start") from err
+        raise ConfigEntryNotReady("Configured data providers must be available before Mise en Place Assistant can start") from err
+    if manager.effective_catalog_providers() == [PROVIDER_MOCKED] and not manager.containers:
+        seeded = await manager.async_seed_demo_data()
+        _LOGGER.info("Seeded %d sample containers for the Mocked catalog", seeded)
 
     async def refresh_catalog(_now) -> None:
-        """Keep the selected provider's food names current without switching source."""
+        """Keep configured providers' food names current without switching source."""
         try:
             await manager.async_refresh_catalog()
         except MealieCatalogError as err:
@@ -327,7 +609,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug(
         "Loaded inventory storage: containers=%d locations=%d logbook=%d",
         len(manager.containers),
-        len(manager.locations),
+        len(manager.storage_locations()),
         len(manager.logbook),
     )
 
@@ -347,7 +629,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info(
         "Mise en Place Assistant entry loaded: containers=%d locations=%d",
         len(manager.containers),
-        len(manager.locations),
+        len(manager.storage_locations()),
     )
 
     async def call_m5dial(action: str, data: dict) -> None:
@@ -401,7 +683,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "incoming_item_labels": [item["label"] for item in payload["items"]],
                 "incoming_item_formats": [item["format"] for item in payload["items"]],
                 "incoming_item_units": [item["unit"] for item in payload["items"]],
-                "incoming_locations": payload["locations"],
+                "incoming_location_ids": [location["id"] for location in payload["locations"]],
+                "incoming_location_labels": [location["label"] for location in payload["locations"]],
             },
         )
 
@@ -424,8 +707,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "item_format": container.get("item_format") or "",
                 "quantity": float(container.get("quantity", 0)),
                 "unit": container.get("unit") or DEFAULT_UNIT,
-                "location": container.get("location") or "unknown",
-                "incoming_locations": payload["locations"],
+                "location_id": container.get("location_id") or "",
+                "location_label": container.get("location") or "The Void",
+                "incoming_location_ids": [location["id"] for location in payload["locations"]],
+                "incoming_location_labels": [location["label"] for location in payload["locations"]],
             },
         )
 
@@ -495,9 +780,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             try:
                 item = await manager.async_catalog_item(event.data.get(ATTR_ITEM_ID, ""))
                 await manager.async_create_container(
-                    tag_id=tag_id, quantity=quantity, location=event.data.get(ATTR_LOCATION),
+                    tag_id=tag_id, quantity=quantity, location_id=event.data.get(ATTR_LOCATION_ID),
                     unit=item["unit"], item_id=item["id"],
-                    item_label=item["label"], item_format=item["format"], source_provider=manager.catalog_provider(),
+                    item_label=item["label"], item_format=item["format"],
+                    source_provider=item.get("provider", manager.catalog_provider()),
                 )
             except (MealieCatalogError, ValueError) as err:
                 _LOGGER.warning("Could not create M5Dial container for tag_id=%s: %s", tag_id, err)
@@ -555,10 +841,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await manager.async_update_container(
                     tag_id=tag_id,
                     quantity=quantity,
-                    location=event.data.get(ATTR_LOCATION),
-                    create_missing=True,
+                    location_id=event.data.get(ATTR_LOCATION_ID),
                 )
-            except ValueError as err:
+            except (KeyError, ValueError) as err:
                 _LOGGER.warning("Could not update M5Dial container for tag_id=%s: %s", tag_id, err)
                 await show_dial_operation_result(
                     tag_id,
@@ -576,6 +861,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await show_dial_operation_result(tag_id, success=True, message="Saved")
 
         hass.async_create_task(update_from_dial())
+
+    async def _async_confirm_inventory(
+        manager: MiseEnPlaceAssistantInventory,
+        tag_id: str,
+        quantity: float | None,
+        mode: str,
+    ) -> None:
+        try:
+            await manager.async_scan_container(tag_id=tag_id, quantity=quantity, mode=mode)
+        except (KeyError, ValueError) as err:
+            _LOGGER.warning("Could not apply inventory confirm for tag_id=%s: %s", tag_id, err)
 
     @callback
     def handle_inventory_confirm(event) -> None:
@@ -605,7 +901,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             mode,
         )
         hass.async_create_task(
-            manager.async_scan_container(tag_id=tag_id, quantity=quantity, mode=mode)
+            _async_confirm_inventory(manager, tag_id, quantity, mode)
         )
 
     entry.async_on_unload(
