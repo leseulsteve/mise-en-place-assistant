@@ -6,6 +6,7 @@
   "documentation": "https://github.com/leseulsteve/resto-hacs",
   "dependencies": [
     "frontend",
+    "panel_custom",
     "websocket_api"
   ],
   "requirements": [

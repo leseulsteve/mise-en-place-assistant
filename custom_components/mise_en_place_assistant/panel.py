@@ -9,7 +9,7 @@ from typing import Any
 import voluptuous as vol
 from aiohttp import web
 
-from homeassistant.components import frontend, websocket_api
+from homeassistant.components import frontend, panel_custom, websocket_api
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant, callback
 
@@ -23,27 +23,44 @@ PANEL_MODULE_URL = "/api/mise_en_place_assistant/panel.js"
 PANEL_FRONTEND_PATH = Path(__file__).with_name("panel_frontend.js")
 
 
-def async_register_panel(hass: HomeAssistant) -> None:
+async def async_register_panel(hass: HomeAssistant) -> None:
     """Register the Mise en Place Assistant sidebar panel, frontend module, and API views."""
+    _LOGGER.debug(
+        "Registering sidebar panel: path=%s component=%s module=%s",
+        PANEL_URL_PATH,
+        PANEL_COMPONENT_NAME,
+        PANEL_MODULE_URL,
+    )
     hass.http.register_view(MiseEnPlaceAssistantPanelModuleView())
     websocket_api.async_register_command(hass, websocket_overview)
-    frontend.add_extra_js_url(hass, PANEL_MODULE_URL)
-    frontend.async_register_built_in_panel(
-        hass,
-        component_name=PANEL_COMPONENT_NAME,
-        sidebar_title="Mise en Place Assistant",
-        sidebar_icon="mdi:package-variant-closed",
-        frontend_url_path=PANEL_URL_PATH,
-        config={"domain": DOMAIN},
-        require_admin=False,
-    )
+    try:
+        await panel_custom.async_register_panel(
+            hass,
+            frontend_url_path=PANEL_URL_PATH,
+            webcomponent_name=PANEL_COMPONENT_NAME,
+            sidebar_title="Mise en Place Assistant",
+            sidebar_icon="mdi:package-variant-closed",
+            module_url=PANEL_MODULE_URL,
+            config={"domain": DOMAIN},
+            embed_iframe=False,
+            trust_external=False,
+            require_admin=False,
+        )
+    except (TypeError, ValueError):
+        _LOGGER.exception(
+            "Could not register sidebar panel: path=%s component=%s module=%s",
+            PANEL_URL_PATH,
+            PANEL_COMPONENT_NAME,
+            PANEL_MODULE_URL,
+        )
+        raise
     _LOGGER.info("Registered Mise en Place Assistant sidebar panel: path=%s", PANEL_URL_PATH)
 
 
 def async_unregister_panel(hass: HomeAssistant) -> None:
     """Remove the Mise en Place Assistant sidebar panel."""
+    _LOGGER.debug("Unregistering sidebar panel: path=%s", PANEL_URL_PATH)
     frontend.async_remove_panel(hass, PANEL_URL_PATH)
-    frontend.remove_extra_js_url(hass, PANEL_MODULE_URL)
     _LOGGER.info("Unregistered Mise en Place Assistant sidebar panel: path=%s", PANEL_URL_PATH)
 
 
@@ -57,9 +74,23 @@ class MiseEnPlaceAssistantPanelModuleView(HomeAssistantView):
     async def get(self, request: web.Request) -> web.Response:
         """Return the panel JavaScript module."""
         hass: HomeAssistant = request.app["hass"]
-        content = await hass.async_add_executor_job(
-            PANEL_FRONTEND_PATH.read_text,
-            "utf-8",
+        _LOGGER.debug("Serving sidebar panel module: url=%s", PANEL_MODULE_URL)
+        try:
+            content = await hass.async_add_executor_job(
+                PANEL_FRONTEND_PATH.read_text,
+                "utf-8",
+            )
+        except OSError:
+            _LOGGER.exception(
+                "Could not read sidebar panel module: path=%s", PANEL_FRONTEND_PATH
+            )
+            raise web.HTTPServiceUnavailable(
+                reason="Mise en Place Assistant panel module is unavailable"
+            )
+        _LOGGER.debug(
+            "Served sidebar panel module: url=%s bytes=%d",
+            PANEL_MODULE_URL,
+            len(content.encode("utf-8")),
         )
         return web.Response(
             text=content,
@@ -76,12 +107,23 @@ def websocket_overview(
     msg: dict[str, Any],
 ) -> None:
     """Return Mise en Place Assistant overview data to the authenticated frontend."""
-    manager = _manager(hass)
-    data = _overview_data(manager)
+    _LOGGER.debug("Received sidebar overview WebSocket request")
+    try:
+        manager = _manager(hass)
+        data = _overview_data(manager)
+    except (KeyError, StopIteration, TypeError, ValueError):
+        _LOGGER.exception("Could not build sidebar overview response")
+        connection.send_error(
+            msg["id"],
+            "overview_unavailable",
+            "Mise en Place Assistant overview is unavailable",
+        )
+        return
     _LOGGER.debug(
-        "Served Mise en Place Assistant overview data: containers=%d locations=%d logbook=%d",
+        "Sending sidebar overview response: containers=%d locations=%d items=%d logbook=%d",
         data["summary"]["containers"],
         data["summary"]["locations"],
+        data["summary"]["items"],
         len(data["logbook"]),
     )
     connection.send_result(msg["id"], data)

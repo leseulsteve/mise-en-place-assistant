@@ -330,8 +330,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Mise en Place Assistant from a config entry."""
+    _LOGGER.debug("Starting Mise en Place Assistant config-entry setup")
     manager = MiseEnPlaceAssistantInventory(hass, entry)
     await manager.async_load()
+    _LOGGER.debug(
+        "Loaded inventory storage: containers=%d locations=%d logbook=%d",
+        len(manager.containers),
+        len(manager.locations),
+        len(manager.logbook),
+    )
 
     enrolled_source = entry.options.get(
         CONF_M5DIAL_EVENT_SOURCE,
@@ -340,11 +347,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = manager
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    _LOGGER.debug("Forwarded integration platform setups: platforms=%s", PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
-    async_register_panel(hass)
+    if len(hass.data[DOMAIN]) == 1:
+        await async_register_panel(hass)
+    else:
+        _LOGGER.debug("Sidebar panel already registered; reusing it for another inventory entry")
     _LOGGER.info(
-        "Mise en Place Assistant entry loaded: entry_id=%s containers=%d locations=%d",
-        entry.entry_id,
+        "Mise en Place Assistant entry loaded: containers=%d locations=%d",
         len(manager.containers),
         len(manager.locations),
     )
@@ -621,11 +631,17 @@ async def _async_update_listener(hass: HomeAssistant, entry: ConfigEntry) -> Non
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a Mise en Place Assistant config entry."""
+    _LOGGER.debug("Starting Mise en Place Assistant config-entry unload")
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
         if not hass.data[DOMAIN]:
             hass.data.pop(DOMAIN)
             async_unregister_panel(hass)
-        _LOGGER.info("Mise en Place Assistant entry unloaded: entry_id=%s", entry.entry_id)
+            _LOGGER.debug("Removed final inventory entry and sidebar panel")
+        else:
+            _LOGGER.debug("Keeping sidebar panel for %d remaining inventory entries", len(hass.data[DOMAIN]))
+        _LOGGER.info("Mise en Place Assistant entry unloaded")
+    else:
+        _LOGGER.warning("Could not unload Mise en Place Assistant platforms; sidebar panel remains registered")
     return unload_ok

@@ -3,16 +3,19 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
     }
-    this._data = null;
-    this._error = "";
-    this._showCreate = false;
+    this._connected = true;
+    this._data ??= null;
+    this._error ??= "";
+    this._showCreate ??= false;
     this._render();
     this._load();
-    this._timer = window.setInterval(() => this._load(), 15000);
+    this._timer ??= window.setInterval(() => this._load(), 15000);
   }
 
   disconnectedCallback() {
+    this._connected = false;
     window.clearInterval(this._timer);
+    this._timer = undefined;
   }
 
   set hass(hass) {
@@ -25,18 +28,38 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     }
   }
 
+  set panel(panel) {
+    this._panel = panel;
+  }
+
+  set route(route) {
+    this._route = route;
+  }
+
+  set narrow(narrow) {
+    this._narrow = narrow;
+    if (this.shadowRoot) {
+      this._render();
+    }
+  }
+
   async _load() {
-    if (!this._hass) {
+    if (!this._hass || this._loading) {
       return;
     }
+    this._loading = true;
     try {
       this._data = await this._hass.callWS({ type: "mise_en_place_assistant/overview" });
       this._error = "";
       this._loadedOnce = true;
     } catch (err) {
       this._error = err?.message || "Could not load Mise en Place Assistant overview.";
+    } finally {
+      this._loading = false;
     }
-    this._render();
+    if (this._connected) {
+      this._render();
+    }
   }
 
   _render() {
