@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.14 - 2026-06-20
+
+- Restructure the Storage tab around location-first cards with contextual container actions, neutral styling, selected-location facts, sublocation grouping, and icon-driven move/add workflows.
+
 ## 0.0.13 - 2026-06-20
 
 - Rework the Home Assistant panel around location-first storage cards, add DEV CRUD simulation, and tighten M5Dial/provider configuration paths, because inventory UX should not feel like a spreadsheet wearing a trench coat.
