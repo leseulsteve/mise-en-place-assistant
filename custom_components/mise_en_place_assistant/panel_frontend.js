@@ -318,11 +318,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           gap: 9px;
           min-width: 0;
         }
-        .location-card-title ha-icon {
-          color: var(--primary-color);
-          --mdc-icon-size: 22px;
-          flex: 0 0 auto;
-        }
         .location-card-title h2 { overflow-wrap: anywhere; }
         .location-card-meta {
           display: flex;
@@ -346,10 +341,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         .location-chip ha-icon { --mdc-icon-size: 15px; color: var(--primary-color); }
         .location-card .location-type {
           color: var(--primary-text-color);
-          font-weight: 800;
-        }
-        .selected-chip {
-          color: var(--primary-color);
           font-weight: 800;
         }
         .location-card-actions {
@@ -377,22 +368,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           --card-accent: var(--error-color, #f44336);
         }
         .icon-button ha-icon { --mdc-icon-size: 18px; }
-        .location-count {
-          display: grid;
-          justify-items: end;
-          gap: 6px;
-          min-width: 82px;
-        }
-        .location-count strong {
-          color: var(--primary-text-color);
-          font-size: 24px;
-          line-height: 1;
-        }
-        .location-count span {
-          color: var(--secondary-text-color);
-          font-size: 12px;
-          font-weight: 700;
-        }
         .location-card-body { padding: 12px 15px 15px; }
         .storage-layout {
           display: grid;
@@ -799,7 +774,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           .compare-grid { grid-template-columns: 1fr; }
           .form-grid, .review-grid, .inline-grid, .debug-grid, .container-actions { grid-template-columns: 1fr; }
           .location-card-header { grid-template-columns: 1fr; }
-          .location-count { justify-items: start; }
           .location-card-actions { justify-content: flex-start; }
           .location-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .storage-layout { grid-template-columns: 1fr; }
@@ -1984,26 +1958,21 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       : "";
     const locationType = location.location_type || "other";
     const contentAttention = this._locationContentAttention(location, containers);
-    const addContainerButton = location.editable === false ? "" : `<button class="icon-button" data-add-container-location="${this._safe(location.id)}" title="Add container here" aria-label="Add container here"><ha-icon icon="mdi:plus-box-outline"></ha-icon></button>`;
-    const selectButton = selected ? "" : `<button class="icon-button" data-select-location="${this._safe(location.id)}" title="View containers" aria-label="View containers"><ha-icon icon="mdi:format-list-bulleted"></ha-icon></button>`;
-    const selectedChip = selected ? `<span class="location-chip selected-chip"><ha-icon icon="mdi:check-circle"></ha-icon><span>Selected</span></span>` : "";
-    const actions = location.editable !== false ? `<div class="location-card-actions">${selectButton}${addContainerButton}<button class="icon-button" data-edit-location="${this._safe(location.id)}" title="Edit location" aria-label="Edit location"><ha-icon icon="mdi:pencil-outline"></ha-icon></button>${removeButton}</div>` : `<div class="location-card-actions">${selectButton}</div>`;
-    return `<article class="card location-card type-${this._safe(this._cssToken(locationType))}${selected ? " selected" : ""}" data-select-location="${this._safe(location.id)}" tabindex="0" aria-expanded="${selected ? "true" : "false"}">
+    const actions = location.editable !== false ? `<div class="location-card-actions"><button class="icon-button" data-edit-location="${this._safe(location.id)}" title="Edit location" aria-label="Edit location"><ha-icon icon="mdi:pencil-outline"></ha-icon></button>${removeButton}</div>` : "";
+    return `<article class="card location-card type-${this._safe(this._cssToken(locationType))}${selected ? " selected" : ""}" data-select-location="${this._safe(location.id)}" tabindex="0">
       <div class="location-card-header">
         <div>
           <div class="location-card-title">
-            <ha-icon icon="${this._locationTypeIcon(locationType)}"></ha-icon>
             <h2>${this._safe(location.name)}</h2>
           </div>
           <div class="location-card-meta">
-            <span class="location-chip"><span class="location-type">${this._safe(locationType.replaceAll("_", " "))}</span></span>
+            <span class="location-chip"><ha-icon icon="${this._locationTypeIcon(locationType)}"></ha-icon><span class="location-type">${this._safe(locationType.replaceAll("_", " "))}</span></span>
             ${this._locationArea(location)}
             ${contentAttention}
-            ${selectedChip}
             ${sublocations}
           </div>
         </div>
-        <div class="location-count"><strong>${this._safe(location.containers)}</strong><span>containers</span>${actions}</div>
+        ${actions}
       </div>
       <div class="location-card-body">
         ${sublocationNav}
