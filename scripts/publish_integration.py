@@ -99,14 +99,10 @@ def main() -> int:
     run(["git", "config", "user.email", "leseulsteve@users.noreply.github.com"])
     run(["python3", "scripts/publish_release.py", args.version, args.release_note])
     validate_files()
-    run(
-        [
-            "git",
-            "add",
-            "custom_components/mise_en_place_assistant/manifest.json",
-            "CHANGELOG.md",
-        ]
-    )
+    run(["git", "add", "custom_components/mise_en_place_assistant/manifest.json"])
+    # CHANGELOG.md is intentionally ignored during ordinary development, but a
+    # generated release entry must be part of the tagged release commit.
+    run(["git", "add", "-f", "CHANGELOG.md"])
     scan_staged_content()
     run(["git", "commit", "-m", f"Release {args.version}"])
     run(["git", "tag", "-a", f"v{args.version}", "-m", f"Mise en Place Assistant {args.version}"])
