@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.12 - 2026-06-20
+
+- Add explainable next actions, storage-attention context, publish-safe mock validation, and stricter M5Dial save guards so stale requests, bad quantities, and invalid locations cannot mutate inventory.
+
 ## 0.0.11 - 2026-06-20
 
 - Add provider-aware dashboard planning, storage attention sensors, explainable suggested actions, and request-scoped M5Dial flows, because stale button ghosts and mystery pantry math were getting too comfortable.
