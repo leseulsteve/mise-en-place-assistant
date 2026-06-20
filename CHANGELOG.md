@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.10 - 2026-06-20
+
+- Move config-flow URL and list-id validation out of HA's serialized schemas, because apparently forms prefer fields over function souvenirs.
+
 ## 0.0.9 - 2026-06-20
 
 - Relax config-flow selector schemas for broader Home Assistant compatibility, because a setup form should not 500 just because a selector enum moved the furniture.
