@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.11 - 2026-06-20
+
+- Add provider-aware dashboard planning, storage attention sensors, explainable suggested actions, and request-scoped M5Dial flows, because stale button ghosts and mystery pantry math were getting too comfortable.
+
 ## 0.0.10 - 2026-06-20
 
 - Move config-flow URL and list-id validation out of HA's serialized schemas, because apparently forms prefer fields over function souvenirs.
