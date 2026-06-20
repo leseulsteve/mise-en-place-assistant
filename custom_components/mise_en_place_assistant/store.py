@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_API_TOKEN, CONF_HOST
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
@@ -19,14 +20,21 @@ from .const import (
     CONTAINER_STATE_DIRTY,
     CONTAINER_STATE_EMPTY,
     CONTAINER_STATE_FILLED,
+    CONF_CATALOG_PROVIDER,
     DEFAULT_UNIT,
     DOMAIN,
+    CONF_MEALIE_TOKEN,
+    CONF_MEALIE_ENTRY_ID,
+    CONF_MEALIE_URL,
+    DEFAULT_CATALOG_PROVIDER,
     EVENT_MISE_EN_PLACE_ASSISTANT_UPDATED,
-    MOCK_ITEMS,
-    MOCK_LOCATIONS,
     SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED,
     STORAGE_VERSION,
+    PROVIDER_MEALIE,
+    PROVIDER_MOCKED,
 )
+from .mealie import MealieCatalogClient, MealieCatalogError
+from .mocked import MOCKED_FOODS
 from .units import normalize_quantity, quantity_in_display_unit, units_are_compatible
 
 _LOGGER = logging.getLogger(__name__)
@@ -57,6 +65,7 @@ class MiseEnPlaceAssistantInventory:
             "locations": {},
             "logbook": [],
             "devices": {},
+            "catalog": [],
         }
         self._listeners: list[Callable[[], None]] = []
 
@@ -97,10 +106,13 @@ class MiseEnPlaceAssistantInventory:
     def _ensure_schema(self) -> bool:
         """Ensure old Mise en Place Assistant data remains usable by the reusable-container model."""
         changed = False
-        for key, default in (("items", {}), ("products", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {})):
+        for key, default in (("items", {}), ("products", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {}), ("catalog", [])):
             if key not in self.data:
                 self.data[key] = default
                 changed = True
+        if "mealie_catalog" in self.data and not self.data.get("catalog"):
+            self.data["catalog"] = self.data["mealie_catalog"]
+            changed = True
 
         # `items` was the pre-catalog registry, keyed by an external/mock item
         # ID. Keep it untouched for migration compatibility, but move canonical
@@ -111,7 +123,7 @@ class MiseEnPlaceAssistantInventory:
                 label=item.get("label"),
                 item_format=item.get("format"),
                 unit=item.get("unit"),
-                source_provider="mock" if self._is_mock_item_id(item.get("id")) else "legacy",
+                source_provider="legacy",
                 legacy_key=key,
             )
             changed = product_changed or changed
@@ -151,17 +163,12 @@ class MiseEnPlaceAssistantInventory:
                     container.get("item_label"),
                     container.get("item_format"),
                     container.get("unit"),
-                    source_provider="mock" if self._is_mock_item_id(container.get("item_id")) else "legacy",
+                    source_provider="legacy",
                 )
                 if container.get("product_id") != product_id:
                     container["product_id"] = product_id
                     changed = True
                 changed = product_changed or changed
-        for item in MOCK_ITEMS:
-            _, product_changed = self._ensure_product(
-                item["id"], item["label"], item.get("format"), item.get("unit"), source_provider="mock"
-            )
-            changed = product_changed or changed
         return changed
 
     @property
@@ -195,9 +202,81 @@ class MiseEnPlaceAssistantInventory:
         compact = "".join(character for character in tag_id if character.isalnum())
         return f"Container {compact[-6:].upper() or 'untagged'}"
 
-    def mock_api_payload(self) -> dict[str, Any]:
-        locations = [location["name"] for location in self.locations.values()] or MOCK_LOCATIONS
-        return {"items": MOCK_ITEMS, "locations": locations}
+    async def async_catalog_payload(self) -> dict[str, Any]:
+        """Return the selected provider's food catalog and local locations."""
+        items = await self.async_refresh_catalog()
+        locations = [location["name"] for location in self.locations.values()]
+        return {"items": items, "locations": locations}
+
+    def catalog_provider(self) -> str:
+        """Return the configured catalog provider, preserving old entries as Mocked."""
+        return self.entry.options.get(
+            CONF_CATALOG_PROVIDER,
+            self.entry.data.get(CONF_CATALOG_PROVIDER, DEFAULT_CATALOG_PROVIDER),
+        )
+
+    async def async_refresh_catalog(self) -> list[dict[str, str]]:
+        """Fetch the selected catalog provider; do not silently switch providers."""
+        provider = self.catalog_provider()
+        if provider == PROVIDER_MOCKED:
+            items = MOCKED_FOODS
+        elif provider == PROVIDER_MEALIE:
+            items = await self._async_fetch_mealie_items()
+        else:
+            raise MealieCatalogError(f"Unsupported catalog provider: {provider}")
+        changed = items != self.data.get("catalog")
+        if changed:
+            self.data["catalog"] = items
+        foods_by_id = {item["id"]: item for item in items}
+        for product in list(self.products.values()):
+            source = product.get("source") or {}
+            food = foods_by_id.get(source.get("id")) if source.get("provider") == provider else None
+            if food:
+                _, product_changed = self._ensure_product(
+                    food["id"], food["label"], food["format"], food["unit"], source_provider=provider
+                )
+                changed = changed or product_changed
+        if changed:
+            await self.async_save(notify=False)
+        return items
+
+    async def _async_fetch_mealie_items(self) -> list[dict[str, str]]:
+        """Fetch Mealie foods for the Mealie provider."""
+        source_entry_id = self.entry.options.get(
+            CONF_MEALIE_ENTRY_ID, self.entry.data.get(CONF_MEALIE_ENTRY_ID)
+        )
+        source_entry = (
+            self.hass.config_entries.async_get_entry(source_entry_id)
+            if source_entry_id
+            else None
+        )
+        if source_entry and source_entry.domain == PROVIDER_MEALIE:
+            url = source_entry.data.get(CONF_HOST, "")
+            token = source_entry.data.get(CONF_API_TOKEN, "")
+        else:
+            url = self.entry.options.get(CONF_MEALIE_URL, self.entry.data.get(CONF_MEALIE_URL, ""))
+            token = self.entry.options.get(CONF_MEALIE_TOKEN, self.entry.data.get(CONF_MEALIE_TOKEN, ""))
+        if url and "://" not in url:
+            url = f"http://{url}"
+        if not url or not token:
+            raise MealieCatalogError("Mealie URL and API token must be configured")
+        try:
+            items = await MealieCatalogClient(self.hass, url, token).async_fetch_foods()
+        except (MealieCatalogError, ValueError) as err:
+            raise MealieCatalogError("Mealie food catalog is unavailable") from err
+        return items
+
+    def catalog_items(self) -> list[dict[str, str]]:
+        """Return the most recently verified selected-provider catalog."""
+        items = self.data.get("catalog", [])
+        return items if isinstance(items, list) else []
+
+    async def async_catalog_item(self, item_id: str) -> dict[str, str]:
+        """Resolve a selected food against the configured provider before saving."""
+        for item in await self.async_refresh_catalog():
+            if item["id"] == item_id:
+                return item
+        raise ValueError("Selected food no longer exists in the configured catalog")
 
     def get_container(self, tag_id: str) -> dict[str, Any] | None:
         return self.containers.get(self._normalize_tag_id(tag_id))
@@ -246,6 +325,7 @@ class MiseEnPlaceAssistantInventory:
         item_id: str | None = None,
         item_label: str | None = None,
         item_format: str | None = None,
+        source_provider: str = "local",
     ) -> None:
         tag_id = self._normalize_tag_id(tag_id)
         old = self.containers.get(tag_id, {})
@@ -258,7 +338,7 @@ class MiseEnPlaceAssistantInventory:
             if state and state != "unknown"
             else (CONTAINER_STATE_FILLED if quantity_data["canonical_quantity"] else CONTAINER_STATE_EMPTY)
         )
-        product_id = self._resolve_product_id(item_id, item_label, item_format, unit)
+        product_id = self._resolve_product_id(item_id, item_label, item_format, unit, source_provider)
         self.containers[tag_id] = {
             "tag_id": tag_id,
             "name": self._normalize_optional(name) or old.get("name") or self.default_container_name(tag_id),
@@ -298,6 +378,7 @@ class MiseEnPlaceAssistantInventory:
         item_id: str | None = None,
         item_label: str | None = None,
         item_format: str | None = None,
+        source_provider: str = "local",
         create_missing: bool = False,
     ) -> None:
         tag_id = self._normalize_tag_id(tag_id)
@@ -360,6 +441,7 @@ class MiseEnPlaceAssistantInventory:
             container["product_id"] = self._resolve_product_id(
                 container.get("item_id"), container.get("item_label"),
                 container.get("item_format"), container.get("unit"),
+                source_provider,
             )
         container["updated_at"] = _utc_now()
         if container.get("product_id"):
@@ -445,13 +527,13 @@ class MiseEnPlaceAssistantInventory:
                 total["quantity"] = None
         return totals
 
-    def _resolve_product_id(self, item_id: str | None, label: str | None, item_format: str | None, unit: str | None) -> str | None:
+    def _resolve_product_id(self, item_id: str | None, label: str | None, item_format: str | None, unit: str | None, source_provider: str = "local") -> str | None:
         """Find or create the local product record for supplied catalog data."""
         if not item_id and not label:
             return None
         product_id, _ = self._ensure_product(
             item_id, label, item_format, unit,
-            source_provider="mock" if self._is_mock_item_id(item_id) else "local",
+            source_provider=source_provider if item_id else "local",
         )
         return product_id
 
@@ -506,16 +588,19 @@ class MiseEnPlaceAssistantInventory:
         product_id = container.get("product_id")
         return self.products.get(product_id) if product_id else None
 
+    def item_label_for_container(self, container: dict[str, Any]) -> str:
+        """Prefer Mealie's current name for a catalog-linked container."""
+        product = self.product_for_container(container)
+        if product and (product.get("source") or {}).get("provider") in {PROVIDER_MEALIE, PROVIDER_MOCKED}:
+            return product.get("label") or container.get("item_label") or "No current item"
+        return container.get("item_label") or "No current item"
+
     def product_snapshot(self, container: dict[str, Any]) -> dict[str, Any] | None:
         """Return the immutable product attribution to embed in a log entry."""
         product = self.product_for_container(container)
         if not product:
             return None
         return {"product_id": product["id"], "label": product["label"], "source": dict(product.get("source") or {})}
-
-    @staticmethod
-    def _is_mock_item_id(item_id: str | None) -> bool:
-        return any(item["id"] == item_id for item in MOCK_ITEMS)
 
     def location_count(self, location_key: str) -> int:
         location = self.locations.get(location_key)

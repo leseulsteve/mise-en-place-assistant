@@ -1,0 +1,32 @@
+"""Deterministic, offline catalog for development and interface testing."""
+
+from __future__ import annotations
+
+
+_FOODS = (
+    ("baby-spinach", "Baby spinach", "bag", "g"), ("romaine", "Romaine lettuce", "head", "each"),
+    ("broccoli", "Broccoli", "crown", "each"), ("carrots", "Carrots", "bag", "g"),
+    ("red-onion", "Red onion", "each", "each"), ("garlic", "Garlic", "bulb", "each"),
+    ("russet-potatoes", "Russet potatoes", "bag", "kg"), ("avocado", "Avocado", "each", "each"),
+    ("bananas", "Bananas", "bunch", "each"), ("blueberries", "Blueberries", "clamshell", "g"),
+    ("strawberries", "Strawberries", "clamshell", "g"), ("lemons", "Lemons", "bag", "each"),
+    ("chicken-thighs", "Chicken thighs", "tray", "g"), ("ground-beef", "Ground beef", "pack", "g"),
+    ("salmon", "Salmon fillet", "fillet", "g"), ("bacon", "Bacon", "pack", "g"),
+    ("eggs", "Eggs", "dozen", "each"), ("whole-milk", "Whole milk", "carton", "ml"),
+    ("greek-yogurt", "Greek yogurt", "tub", "g"), ("cheddar", "Cheddar cheese", "block", "g"),
+    ("butter", "Salted butter", "block", "g"), ("sourdough", "Sourdough bread", "loaf", "each"),
+    ("basmati-rice", "Basmati rice", "bag", "g"), ("spaghetti", "Spaghetti", "box", "g"),
+    ("black-beans", "Black beans", "can", "g"), ("chickpeas", "Chickpeas", "can", "g"),
+    ("crushed-tomatoes", "Crushed tomatoes", "can", "ml"), ("coconut-milk", "Coconut milk", "can", "ml"),
+    ("vegetable-stock", "Vegetable stock", "carton", "ml"), ("olive-oil", "Extra-virgin olive oil", "bottle", "ml"),
+    ("soy-sauce", "Soy sauce", "bottle", "ml"), ("peanut-butter", "Peanut butter", "jar", "g"),
+    ("rolled-oats", "Rolled oats", "canister", "g"), ("all-purpose-flour", "All-purpose flour", "bag", "g"),
+    ("granulated-sugar", "Granulated sugar", "bag", "g"), ("coffee", "Coffee beans", "bag", "g"),
+    ("frozen-peas", "Frozen peas", "bag", "g"), ("frozen-corn", "Frozen corn", "bag", "g"),
+    ("vanilla-ice-cream", "Vanilla ice cream", "tub", "ml"), ("dark-chocolate", "Dark chocolate", "bar", "g"),
+)
+
+MOCKED_FOODS = [
+    {"id": f"mocked:{food_id}", "label": label, "format": package, "unit": unit}
+    for food_id, label, package, unit in _FOODS
+]

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import logging
 import math
+from datetime import timedelta
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
@@ -24,18 +26,17 @@ from .const import (
     EVENT_MISE_EN_PLACE_ASSISTANT_SCAN,
     EVENT_MISE_EN_PLACE_ASSISTANT_UPDATE_CONTAINER,
     EVENT_INVENTORY_CONFIRM,
-    MOCK_ITEMS,
     PLATFORMS,
     SERVICE_CREATE_CONTAINER,
     SERVICE_CREATE_LOCATION,
     SERVICE_FILL_CONTAINER,
-    SERVICE_MOCK_API,
     SERVICE_MARK_CONTAINER_CLEAN,
     SERVICE_REMOVE_ITEMS,
     SERVICE_SCAN_CONTAINER,
     SERVICE_UPDATE_CONTAINER,
 )
 from .panel import async_register_panel, async_unregister_panel
+from .mealie import MealieCatalogError
 from .store import MiseEnPlaceAssistantInventory
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,9 +49,7 @@ ATTR_QUANTITY = "quantity"
 ATTR_STATE = "state"
 ATTR_TAG_ID = "tag_id"
 ATTR_UNIT = "unit"
-ATTR_ITEM_FORMAT = "item_format"
 ATTR_ITEM_ID = "item_id"
-ATTR_ITEM_LABEL = "item_label"
 
 SCAN_MODES = ["set", "add", "remove"]
 
@@ -93,16 +92,6 @@ def _manager(hass: HomeAssistant) -> MiseEnPlaceAssistantInventory:
     return next(iter(domain_data.values()))
 
 
-def _mock_item(item_id: str | None) -> dict | None:
-    """Return a mock API item by ID."""
-    if not item_id:
-        return None
-    for item in MOCK_ITEMS:
-        if item["id"] == item_id:
-            return item
-    return None
-
-
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up Mise en Place Assistant services."""
 
@@ -113,7 +102,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
     async def handle_create_container(call: ServiceCall) -> None:
         manager = _manager(hass)
-        item = _mock_item(call.data.get(ATTR_ITEM_ID))
+        try:
+            item = await manager.async_catalog_item(call.data[ATTR_ITEM_ID])
+        except (MealieCatalogError, ValueError) as err:
+            raise ServiceValidationError(str(err)) from err
         _LOGGER.info(
             "Creating Mise en Place Assistant container from service: tag_id=%s item_id=%s quantity=%s location=%s",
             call.data[ATTR_TAG_ID],
@@ -128,16 +120,23 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 quantity=call.data.get(ATTR_QUANTITY, 0),
                 location=call.data.get(ATTR_LOCATION),
                 state=call.data.get(ATTR_STATE),
-                unit=call.data.get(ATTR_UNIT) or (item or {}).get("unit", DEFAULT_UNIT),
-                item_id=call.data.get(ATTR_ITEM_ID),
-                item_label=call.data.get(ATTR_ITEM_LABEL) or (item or {}).get("label"),
-                item_format=call.data.get(ATTR_ITEM_FORMAT) or (item or {}).get("format"),
+                unit=item["unit"],
+                item_id=item["id"],
+                item_label=item["label"],
+                item_format=item["format"],
+                source_provider=manager.catalog_provider(),
             )
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
 
     async def handle_update_container(call: ServiceCall) -> None:
         manager = _manager(hass)
+        item = None
+        if ATTR_ITEM_ID in call.data:
+            try:
+                item = await manager.async_catalog_item(call.data[ATTR_ITEM_ID])
+            except (MealieCatalogError, ValueError) as err:
+                raise ServiceValidationError(str(err)) from err
         _LOGGER.info(
             "Updating Mise en Place Assistant container from service: tag_id=%s quantity=%s delta=%s location=%s state=%s",
             call.data[ATTR_TAG_ID],
@@ -154,10 +153,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 location=call.data.get(ATTR_LOCATION),
                 state=call.data.get(ATTR_STATE),
                 name=call.data.get(ATTR_NAME),
-                unit=call.data.get(ATTR_UNIT),
-                item_id=call.data.get(ATTR_ITEM_ID),
-                item_label=call.data.get(ATTR_ITEM_LABEL),
-                item_format=call.data.get(ATTR_ITEM_FORMAT),
+                unit=call.data.get(ATTR_UNIT) or (item or {}).get("unit"),
+                item_id=(item or {}).get("id"),
+                item_label=(item or {}).get("label"),
+                item_format=(item or {}).get("format"),
+                source_provider=manager.catalog_provider() if item else "local",
             )
         except (KeyError, ValueError) as err:
             raise ServiceValidationError(
@@ -225,11 +225,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
             ) from err
 
-    async def handle_mock_api(call: ServiceCall) -> None:
-        manager = _manager(hass)
-        _LOGGER.debug("Firing Mise en Place Assistant mock API response event")
-        hass.bus.async_fire("mise_en_place_assistant.mock_api_response", manager.mock_api_payload())
-
     hass.services.async_register(
         DOMAIN,
         SERVICE_CREATE_LOCATION,
@@ -247,10 +242,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_QUANTITY, default=0): _nonnegative_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
                 vol.Optional(ATTR_STATE): cv.string,
-                vol.Optional(ATTR_UNIT, default=DEFAULT_UNIT): cv.string,
-                vol.Optional(ATTR_ITEM_ID): cv.string,
-                vol.Optional(ATTR_ITEM_LABEL): cv.string,
-                vol.Optional(ATTR_ITEM_FORMAT): cv.string,
+                vol.Required(ATTR_ITEM_ID): cv.string,
             }
         ),
     )
@@ -268,8 +260,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_STATE): cv.string,
                 vol.Optional(ATTR_UNIT): cv.string,
                 vol.Optional(ATTR_ITEM_ID): cv.string,
-                vol.Optional(ATTR_ITEM_LABEL): cv.string,
-                vol.Optional(ATTR_ITEM_FORMAT): cv.string,
             }
         ),
     )
@@ -318,12 +308,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             }
         ),
     )
-    hass.services.async_register(
-        DOMAIN,
-        SERVICE_MOCK_API,
-        handle_mock_api,
-        schema=vol.Schema({}),
-    )
     _LOGGER.debug("Registered Mise en Place Assistant services")
     return True
 
@@ -333,6 +317,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("Starting Mise en Place Assistant config-entry setup")
     manager = MiseEnPlaceAssistantInventory(hass, entry)
     await manager.async_load()
+    try:
+        await manager.async_refresh_catalog()
+    except MealieCatalogError as err:
+        raise ConfigEntryNotReady("The selected catalog provider must be available before Mise en Place Assistant can start") from err
+
+    async def refresh_catalog(_now) -> None:
+        """Keep the selected provider's food names current without switching source."""
+        try:
+            await manager.async_refresh_catalog()
+        except MealieCatalogError as err:
+            _LOGGER.warning("Catalog provider refresh failed; food updates are paused: %s", err)
+
+    entry.async_on_unload(
+        async_track_time_interval(hass, refresh_catalog, timedelta(minutes=5))
+    )
     _LOGGER.debug(
         "Loaded inventory storage: containers=%d locations=%d logbook=%d",
         len(manager.containers),
@@ -382,9 +381,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except HomeAssistantError as err:
             _LOGGER.warning("Could not call ESPHome action esphome.%s: %s", service, err)
 
+    async def show_dial_operation_result(tag_id: str, *, success: bool, message: str) -> None:
+        """Acknowledge the completed Dial write instead of assuming it succeeded."""
+        await call_m5dial(
+            "show_operation_result",
+            {
+                "tag_id": tag_id,
+                "success": success,
+                "message": message,
+            },
+        )
+
     async def show_create_flow(tag_id: str) -> None:
         """Tell the M5Dial to show the create-container flow."""
-        payload = manager.mock_api_payload()
+        payload = await manager.async_catalog_payload()
         _LOGGER.info(
             "Showing Mise en Place Assistant create flow on M5Dial: tag_id=%s items=%d locations=%d",
             tag_id,
@@ -405,7 +415,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def show_known_flow(tag_id: str, container: dict) -> None:
         """Tell the M5Dial to show the known-container flow."""
-        payload = manager.mock_api_payload()
+        payload = await manager.async_catalog_payload()
         _LOGGER.info(
             "Showing Mise en Place Assistant known flow on M5Dial: tag_id=%s quantity=%s location=%s",
             tag_id,
@@ -416,7 +426,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "show_known_container",
             {
                 "tag_id": tag_id,
-                "item_label": container.get("item_label")
+                "item_label": manager.item_label_for_container(container)
                 or container.get("name")
                 or "Container",
                 "item_format": container.get("item_format") or "",
@@ -441,7 +451,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             await show_known_flow(tag_id, container)
             return
-        payload = manager.mock_api_payload()
+        payload = await manager.async_catalog_payload()
         await call_m5dial(
             "show_clean_container",
             {
@@ -496,7 +506,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not tag_id:
             _LOGGER.debug("Ignoring Mise en Place Assistant create event without tag_id")
             return
-        item = _mock_item(event.data.get(ATTR_ITEM_ID))
         quantity = event.data.get(ATTR_QUANTITY, 0)
         try:
             quantity = float(quantity)
@@ -506,7 +515,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 tag_id,
                 event.data.get(ATTR_QUANTITY),
             )
-            quantity = 0
+            hass.async_create_task(
+                show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    message="Could not save",
+                )
+            )
+            return
         _LOGGER.info(
             "Creating Mise en Place Assistant container from M5Dial: tag_id=%s item_id=%s quantity=%s location=%s",
             tag_id,
@@ -514,19 +530,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             quantity,
             event.data.get(ATTR_LOCATION),
         )
-        hass.async_create_task(
-            manager.async_create_container(
-                tag_id=tag_id,
-                quantity=quantity,
-                location=event.data.get(ATTR_LOCATION),
-                state=event.data.get(ATTR_STATE, "unknown"),
-                unit=event.data.get(ATTR_UNIT) or (item or {}).get("unit", DEFAULT_UNIT),
-                item_id=event.data.get(ATTR_ITEM_ID),
-                item_label=event.data.get(ATTR_ITEM_LABEL) or (item or {}).get("label"),
-                item_format=event.data.get(ATTR_ITEM_FORMAT)
-                or (item or {}).get("format"),
-            )
-        )
+        async def create_from_mealie() -> None:
+            try:
+                item = await manager.async_catalog_item(event.data.get(ATTR_ITEM_ID, ""))
+                await manager.async_create_container(
+                    tag_id=tag_id, quantity=quantity, location=event.data.get(ATTR_LOCATION),
+                    state=event.data.get(ATTR_STATE, "unknown"), unit=item["unit"], item_id=item["id"],
+                    item_label=item["label"], item_format=item["format"], source_provider=manager.catalog_provider(),
+                )
+            except (MealieCatalogError, ValueError) as err:
+                _LOGGER.warning("Could not create M5Dial container for tag_id=%s: %s", tag_id, err)
+                await show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    message="Could not save",
+                )
+            except Exception:  # noqa: BLE001 - the Dial needs an explicit write failure.
+                _LOGGER.exception("Could not create M5Dial container for tag_id=%s", tag_id)
+                await show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    message="Could not save",
+                )
+            else:
+                await show_dial_operation_result(tag_id, success=True, message="Saved")
+
+        hass.async_create_task(create_from_mealie())
 
     @callback
     def handle_update_from_dial(event) -> None:
@@ -546,6 +575,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 tag_id,
                 quantity,
             )
+            hass.async_create_task(
+                show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    message="Could not save",
+                )
+            )
             return
         _LOGGER.info(
             "Updating Mise en Place Assistant container from M5Dial: tag_id=%s quantity=%s location=%s",
@@ -553,14 +589,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             quantity,
             event.data.get(ATTR_LOCATION),
         )
-        hass.async_create_task(
-            manager.async_update_container(
-                tag_id=tag_id,
-                quantity=quantity,
-                location=event.data.get(ATTR_LOCATION),
-                create_missing=True,
-            )
-        )
+        async def update_from_dial() -> None:
+            try:
+                await manager.async_update_container(
+                    tag_id=tag_id,
+                    quantity=quantity,
+                    location=event.data.get(ATTR_LOCATION),
+                    create_missing=True,
+                )
+            except ValueError as err:
+                _LOGGER.warning("Could not update M5Dial container for tag_id=%s: %s", tag_id, err)
+                await show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    message="Could not save",
+                )
+            except Exception:  # noqa: BLE001 - the Dial needs an explicit write failure.
+                _LOGGER.exception("Could not update M5Dial container for tag_id=%s", tag_id)
+                await show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    message="Could not save",
+                )
+            else:
+                await show_dial_operation_result(tag_id, success=True, message="Saved")
+
+        hass.async_create_task(update_from_dial())
 
     @callback
     def handle_clean_from_dial(event) -> None:
@@ -571,9 +625,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not tag_id:
             _LOGGER.debug("Ignoring Mise en Place Assistant clean event without tag_id")
             return
-        hass.async_create_task(
-            manager.async_mark_container_clean(tag_id, location=event.data.get(ATTR_LOCATION))
-        )
+        async def clean_from_dial() -> None:
+            try:
+                await manager.async_mark_container_clean(tag_id, location=event.data.get(ATTR_LOCATION))
+            except (KeyError, ValueError) as err:
+                _LOGGER.warning("Could not mark M5Dial container clean for tag_id=%s: %s", tag_id, err)
+                await show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    message="Could not save",
+                )
+            except Exception:  # noqa: BLE001 - the Dial needs an explicit write failure.
+                _LOGGER.exception("Could not mark M5Dial container clean for tag_id=%s", tag_id)
+                await show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    message="Could not save",
+                )
+            else:
+                await show_dial_operation_result(tag_id, success=True, message="Saved")
+
+        hass.async_create_task(clean_from_dial())
 
     @callback
     def handle_inventory_confirm(event) -> None:

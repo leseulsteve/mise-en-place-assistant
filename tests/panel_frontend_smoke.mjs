@@ -47,8 +47,13 @@ const Panel = customElements.get("mise_en_place_assistant-panel");
 assert.ok(Panel, "the custom panel element must be registered");
 
 const panel = new Panel();
+let inventoryUpdated;
+let eventsUnsubscribed = false;
+let overviewRequests = 0;
 panel.hass = {
-  callWS: async () => ({
+  callWS: async () => {
+    overviewRequests += 1;
+    return {
     summary: { containers: 1, locations: 1, items: 1, low: 0, dirty: 0 },
     containers: [],
     items: [],
@@ -57,11 +62,25 @@ panel.hass = {
     empty_containers: [],
     low_containers: [],
     dirty_containers: [],
-  }),
+    };
+  },
+  connection: {
+    subscribeEvents(listener, eventType) {
+      assert.equal(eventType, "mise_en_place_assistant.updated");
+      inventoryUpdated = listener;
+      return Promise.resolve(() => {
+        eventsUnsubscribed = true;
+      });
+    },
+  },
 };
 panel.connectedCallback();
 await new Promise((resolve) => setImmediate(resolve));
 
 assert.match(panel.shadowRoot.innerHTML, /Mise en Place Assistant/);
 assert.match(panel.shadowRoot.innerHTML, /Containers/);
+inventoryUpdated();
+await new Promise((resolve) => setImmediate(resolve));
+assert.equal(overviewRequests, 2, "inventory events refresh the panel immediately");
 panel.disconnectedCallback();
+assert.equal(eventsUnsubscribed, true, "the inventory event subscription is released");

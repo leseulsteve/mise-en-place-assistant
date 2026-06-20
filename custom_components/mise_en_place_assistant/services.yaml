@@ -36,17 +36,8 @@ create_container:
             - clean
             - stored
           custom_value: true
-    unit:
-      default: items
-      selector:
-        text:
     item_id:
-      selector:
-        text:
-    item_label:
-      selector:
-        text:
-    item_format:
+      required: true
       selector:
         text:
 
@@ -157,6 +148,3 @@ mark_container_clean:
     location:
       selector:
         text:
-
-mock_api:
-  fields: {}

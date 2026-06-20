@@ -143,6 +143,37 @@ api:
               - script.stop: scan_timeout
               - script.execute: show_page
 
+    - action: show_operation_result
+      variables:
+        tag_id: string
+        success: bool
+        message: string
+      then:
+        - lambda: |-
+            id(ha_response_accepted) = id(current_view) == 29 && id(last_tag_id) == tag_id;
+            if (!id(ha_response_accepted)) {
+              ESP_LOGW("mise_en_place_assistant", "Ignoring stale operation result: tag=%s view=%d", tag_id.c_str(), id(current_view));
+            } else {
+              id(error_message) = message;
+              id(current_view) = success ? 30 : 31;
+            }
+        - if:
+            condition:
+              lambda: 'return id(ha_response_accepted) && success;'
+            then:
+              - script.execute: sound_saved
+        - if:
+            condition:
+              lambda: 'return id(ha_response_accepted) && !success;'
+            then:
+              - script.execute: sound_attention
+        - if:
+            condition:
+              lambda: 'return id(ha_response_accepted);'
+            then:
+              - script.stop: operation_timeout
+              - script.execute: show_page
+
 ota:
   - platform: esphome
     password: !secret ota_password
@@ -249,6 +280,15 @@ i2c:
     scl: GPIO12
     scan: true
     frequency: 100kHz
+
+# The Dial's FT3267 touch controller uses ESPHome's FT5x06 driver at 0x38.
+# Touch is used only for safe, non-inventory navigation.
+touchscreen:
+  - platform: ft5x06
+    id: dial_touch
+    i2c_id: bus_internal
+    address: 0x38
+    display: round_display
 
 display:
   - platform: ili9xxx
@@ -378,6 +418,7 @@ text_sensor:
       switch (id(current_view)) {
         case 0: return {"Idle"};
         case 1: return {"Waiting for Home Assistant"};
+        case 2: return {"Choosing style"};
         case 10: return {"Choosing item"};
         case 11: return {"Choosing quantity"};
         case 13: return {"Choosing location"};
@@ -385,6 +426,7 @@ text_sensor:
         case 21: return {"Moving container"};
         case 22: return {"Confirming clean container"};
         case 23: return {"Choosing clean storage"};
+        case 29: return {"Saving"};
         case 30: return {"Saved"};
         case 31: return {"Home Assistant timeout"};
         default: return {"Unknown"};
@@ -472,15 +514,56 @@ globals:
     type: std::string
     initial_value: '"unknown"'
 
+  - id: error_message
+    type: std::string
+    initial_value: '"Home Assistant did not reply"'
+
 # ─────────────────────────────
 # SCRIPTS (NO INVALID IF SHORTCUTS)
 # ─────────────────────────────
 
 script:
 
+  # The Dial has a piezo buzzer rather than a full speaker. Keep its voice
+  # deliberately small: rising notes mean progress, low notes mean attention.
+  - id: sound_advance
+    then:
+      - rtttl.play: "advance:d=32,o=6,b=180:16e6,16g6"
+
+  - id: sound_saved
+    then:
+      - rtttl.play: "saved:d=32,o=6,b=180:16c6,16e6,16g6"
+
+  - id: sound_cancel
+    then:
+      - rtttl.play: "cancel:d=32,o=5,b=150:16g5,16e5"
+
+  - id: sound_attention
+    then:
+      - rtttl.play: "attention:d=16,o=5,b=120:8c5,8g4"
+
+  - id: show_style_picker
+    then:
+      - lambda: 'id(current_view) = 2;'
+      - script.execute: sound_advance
+      - lvgl.page.show:
+          id: page_style_picker
+          animation: MOVE_LEFT
+          time: 180ms
+
+  - id: close_style_picker
+    then:
+      - lambda: 'id(current_view) = 0;'
+      - script.execute: sound_advance
+      - lvgl.page.show:
+          id: page_idle
+          animation: MOVE_RIGHT
+          time: 180ms
+
   - id: cancel_flow
     then:
       - script.stop: scan_timeout
+      - script.stop: operation_timeout
       - lambda: |-
           ESP_LOGI("mise_en_place_assistant", "Cancelling Dial flow: view=%d tag=%s", id(current_view), id(last_tag_id).c_str());
           id(ha_response_accepted) = false;
@@ -503,6 +586,12 @@ script:
             lambda: 'return id(current_view) == 1;'
           then:
             - lvgl.page.show: page_loading
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 2;'
+          then:
+            - lvgl.page.show: page_style_picker
 
       - if:
           condition:
@@ -548,6 +637,12 @@ script:
 
       - if:
           condition:
+            lambda: 'return id(current_view) == 29;'
+          then:
+            - lvgl.page.show: page_saving
+
+      - if:
+          condition:
             lambda: 'return id(current_view) == 30;'
           then:
             - lvgl.page.show: page_done
@@ -569,7 +664,24 @@ script:
           then:
             - lambda: |-
                 ESP_LOGW("mise_en_place_assistant", "Scan timed out waiting for Home Assistant response: tag=%s", id(last_tag_id).c_str());
+                id(error_message) = "Home Assistant did not reply";
                 id(current_view) = 31;
+            - script.execute: sound_attention
+            - script.execute: show_page
+
+  - id: operation_timeout
+    mode: restart
+    then:
+      - delay: 12s
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 29;'
+          then:
+            - lambda: |-
+                ESP_LOGW("mise_en_place_assistant", "Save confirmation timed out: tag=%s", id(last_tag_id).c_str());
+                id(error_message) = "Save not confirmed";
+                id(current_view) = 31;
+            - script.execute: sound_attention
             - script.execute: show_page
 
   - id: encoder_up
@@ -614,6 +726,7 @@ script:
             - lambda: |-
                 ESP_LOGI("mise_en_place_assistant", "Item selected: id=%s label=%s format=%s unit=%s", id(selected_item_id).c_str(), id(selected_item_label).c_str(), id(selected_item_format).c_str(), id(selected_item_unit).c_str());
                 id(current_view) = 11;
+            - script.execute: sound_advance
             - script.execute: show_page
 
       - if:
@@ -623,6 +736,7 @@ script:
             - lambda: |-
                 ESP_LOGI("mise_en_place_assistant", "Quantity selected: %g %s", id(inventory_qty), id(selected_item_unit).c_str());
                 id(current_view) = 13;
+            - script.execute: sound_advance
             - script.execute: show_page
 
       - if:
@@ -631,6 +745,9 @@ script:
           then:
             - lambda: |-
                 ESP_LOGI("mise_en_place_assistant", "Creating container: tag=%s item=%s qty=%g location=%s", id(last_tag_id).c_str(), id(selected_item_label).c_str(), id(inventory_qty), id(selected_location_label).c_str());
+            - lambda: 'id(current_view) = 29;'
+            - script.execute: show_page
+            - script.execute: operation_timeout
             - homeassistant.event:
                 event: esphome.mise_en_place_assistant_create_container
                 data:
@@ -643,9 +760,6 @@ script:
                   location: !lambda 'return id(selected_location_label);'
                   state: "unknown"
                   source: "${device_name}"
-            - lambda: |-
-                id(current_view) = 30;
-            - script.execute: show_page
 
       - if:
           condition:
@@ -654,6 +768,7 @@ script:
             - lambda: |-
                 ESP_LOGI("mise_en_place_assistant", "Known quantity selected: tag=%s qty=%g", id(last_tag_id).c_str(), id(inventory_qty));
                 id(current_view) = 21;
+            - script.execute: sound_advance
             - script.execute: show_page
 
       - if:
@@ -662,6 +777,9 @@ script:
           then:
             - lambda: |-
                 ESP_LOGI("mise_en_place_assistant", "Updating container: tag=%s qty=%g location=%s", id(last_tag_id).c_str(), id(inventory_qty), id(selected_location_label).c_str());
+            - lambda: 'id(current_view) = 29;'
+            - script.execute: show_page
+            - script.execute: operation_timeout
             - homeassistant.event:
                 event: esphome.mise_en_place_assistant_update_container
                 data:
@@ -669,15 +787,13 @@ script:
                   quantity: !lambda 'return std::to_string(id(inventory_qty));'
                   location: !lambda 'return id(selected_location_label);'
                   source: "${device_name}"
-            - lambda: |-
-                id(current_view) = 30;
-            - script.execute: show_page
 
       - if:
           condition:
             lambda: 'return id(press_view) == 22 && !id(last_tag_id).empty();'
           then:
             - lambda: 'id(current_view) = 23;'
+            - script.execute: sound_advance
             - script.execute: show_page
 
       - if:
@@ -686,32 +802,42 @@ script:
           then:
             - lambda: |-
                 ESP_LOGI("mise_en_place_assistant", "Container marked clean: tag=%s", id(last_tag_id).c_str());
+            - lambda: 'id(current_view) = 29;'
+            - script.execute: show_page
+            - script.execute: operation_timeout
             - homeassistant.event:
                 event: esphome.mise_en_place_assistant_mark_clean
                 data:
                   tag_id: !lambda 'return id(last_tag_id);'
                   location: !lambda 'return id(selected_location_label);'
                   source: "${device_name}"
-            - lambda: 'id(current_view) = 30;'
-            - script.execute: show_page
 
       - if:
           condition:
             lambda: 'return id(press_view) == 30 || id(press_view) == 31;'
           then:
             - lambda: 'id(current_view) = 0;'
+            - script.execute: sound_advance
             - script.execute: show_page
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 2;'
+          then:
+            - script.execute: close_style_picker
 
   - id: on_long_press
     then:
+      - script.execute: sound_cancel
       - script.execute: cancel_flow
 
   - id: on_nfc
     then:
-      - rtttl.play: "beep:d=4,o=5,b=180:16e6"
+      - rtttl.play: "tag:d=32,o=6,b=180:16g6"
       - lambda: |-
           ESP_LOGI("mise_en_place_assistant", "NFC tag scanned: %s", id(last_tag_id).c_str());
           id(ha_response_accepted) = false;
+          id(error_message) = "Home Assistant did not reply";
           id(current_view) = 1;
           id(inventory_qty) = 0;
       - script.execute: show_page
@@ -787,275 +913,365 @@ script:
       - lvgl.label.update:
           id: lbl_clean_location
           text: !lambda 'return id(selected_location_label);'
+      - lvgl.label.update:
+          id: lbl_error_message
+          text: !lambda 'return id(error_message);'
 
 # ─────────────────────────────
-# LVGL (LEFT EMPTY ON PURPOSE FOR STABILITY)
+# LVGL — a quiet, warm pantry palette. Colour always accompanies plain text so
+# success and failure remain understandable on a dim screen or without sound.
 # ─────────────────────────────
 lvgl:
   displays:
     - round_display
-  bg_color: 0x0B0B0F
+  touchscreens:
+    - touchscreen_id: dial_touch
+  bg_color: 0x17131A
 
   pages:
 
     - id: page_idle
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: CENTER
-            y: -28
+            y: -42
             text: "Mise en Place Assistant"
-            text_color: 0xFFFFFF
+            text_color: 0xFFF8EA
         - label:
             align: CENTER
-            y: 8
+            y: -12
+            text: "PANTRY PAL"
+            text_color: 0xC6B4E9
+        - label:
+            align: CENTER
+            y: 18
             text: "Scan a tag"
-            text_color: 0x8E8E93
+            text_color: 0xFFF8EA
+        - label:
+            align: CENTER
+            y: 48
+            text: "A little kitchen magic"
+            text_color: 0x655C66
+        - obj:
+            width: 100%
+            height: 100%
+            align: CENTER
+            bg_opa: TRANSP
+            border_width: 0
+            clickable: true
+            on_swipe_left:
+              - script.execute: show_style_picker
+
+    - id: page_style_picker
+      bg_color: 0x17131A
+      widgets:
+        - label:
+            align: CENTER
+            y: -56
+            text: "STYLE CABINET"
+            text_color: 0xC6B4E9
+        - label:
+            align: CENTER
+            y: -20
+            text: "YOSHOKU PANTRY"
+            text_color: 0xFFF8EA
+        - label:
+            align: CENTER
+            y: 12
+            text: "Warm ink  Cream  Matcha"
+            text_color: 0x91C788
         - label:
             align: CENTER
             y: 42
-            text: "Hold to cancel"
-            text_color: 0x3A3A3C
+            text: "ACTIVE - press to keep"
+            text_color: 0xB8AEB8
+        - label:
+            align: BOTTOM_MID
+            y: -16
+            text: "Swipe right to return"
+            text_color: 0x655C66
+        - obj:
+            width: 100%
+            height: 100%
+            align: CENTER
+            bg_opa: TRANSP
+            border_width: 0
+            clickable: true
+            on_click:
+              - script.execute: close_style_picker
+            on_swipe_right:
+              - script.execute: close_style_picker
 
     - id: page_loading
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: CENTER
-            y: -14
-            text: "Reading tag"
-            text_color: 0xFFFFFF
+            y: -34
+            text: "ONE MOMENT"
+            text_color: 0xF1C27D
         - label:
             align: CENTER
-            y: 22
-            text: "One moment..."
-            text_color: 0x8E8E93
+            y: -2
+            text: "Reading your tag"
+            text_color: 0xFFF8EA
+        - label:
+            align: CENTER
+            y: 34
+            text: "Talking to Home Assistant"
+            text_color: 0xB8AEB8
 
     - id: page_create_item
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: TOP_MID
             y: 22
             text: "New container"
-            text_color: 0x8E8E93
+            text_color: 0xC6B4E9
         - label:
             id: lbl_item_name
             align: CENTER
             y: -28
             text: ""
-            text_color: 0xFFFFFF
+            text_color: 0xFFF8EA
         - label:
             id: lbl_item_count
             align: CENTER
             y: 8
             text: "0 items"
-            text_color: 0x34C759
+            text_color: 0x91C788
         - label:
             id: lbl_item_format
             align: CENTER
             y: 40
             text: ""
-            text_color: 0x8E8E93
+            text_color: 0xB8AEB8
         - label:
             align: BOTTOM_MID
             y: -24
-            text: "Turn item  Press next"
-            text_color: 0x3A3A3C
+            text: "Turn to browse  Press to choose"
+            text_color: 0x655C66
 
     - id: page_create_qty
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: TOP_MID
             y: 22
             text: "Inventory count"
-            text_color: 0x8E8E93
+            text_color: 0xC6B4E9
         - label:
             id: lbl_qty_value
             align: CENTER
             y: -18
             text: "0"
-            text_color: 0xFFFFFF
+            text_color: 0xFFF8EA
         - label:
             id: lbl_qty_unit
             align: CENTER
             y: 34
             text: "items"
-            text_color: 0x34C759
+            text_color: 0x91C788
         - label:
             align: BOTTOM_MID
             y: -24
-            text: "Turn count  Press next"
-            text_color: 0x3A3A3C
+            text: "Turn to count  Press to continue"
+            text_color: 0x655C66
 
     - id: page_create_location
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: TOP_MID
             y: 22
             text: "Location"
-            text_color: 0x8E8E93
+            text_color: 0xC6B4E9
         - label:
             id: lbl_location_name
             align: CENTER
             y: -12
             text: ""
-            text_color: 0xFFFFFF
+            text_color: 0xFFF8EA
         - label:
             align: CENTER
             y: 32
-            text: "Press to create"
-            text_color: 0x34C759
+            text: "Press to save"
+            text_color: 0x91C788
         - label:
             align: BOTTOM_MID
             y: -24
-            text: "Turn location"
-            text_color: 0x3A3A3C
+            text: "Turn to choose a home"
+            text_color: 0x655C66
 
     - id: page_known
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: TOP_MID
             y: 20
             text: "Current inventory"
-            text_color: 0x8E8E93
+            text_color: 0xC6B4E9
         - label:
             id: lbl_known_name
             align: CENTER
             y: -44
             text: ""
-            text_color: 0xFFFFFF
+            text_color: 0xFFF8EA
         - label:
             id: lbl_known_format
             align: CENTER
             y: -12
             text: ""
-            text_color: 0x8E8E93
+            text_color: 0xB8AEB8
         - label:
             id: lbl_known_qty
             align: CENTER
             y: 26
             text: "0 items"
-            text_color: 0x34C759
+            text_color: 0x91C788
         - label:
             id: lbl_known_location
             align: CENTER
             y: 58
             text: ""
-            text_color: 0x8E8E93
+            text_color: 0xB8AEB8
         - label:
             align: BOTTOM_MID
             y: -18
-            text: "Turn count  Press next"
-            text_color: 0x3A3A3C
+            text: "Turn to count  Press to continue"
+            text_color: 0x655C66
 
     - id: page_known_location
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: TOP_MID
             y: 22
             text: "Move container"
-            text_color: 0x8E8E93
+            text_color: 0xC6B4E9
         - label:
             id: lbl_known_location_select
             align: CENTER
             y: -12
             text: ""
-            text_color: 0xFFFFFF
+            text_color: 0xFFF8EA
         - label:
             align: CENTER
             y: 32
-            text: "Press to save"
-            text_color: 0x34C759
+            text: "Press to save this move"
+            text_color: 0x91C788
         - label:
             align: BOTTOM_MID
             y: -24
-            text: "Turn location"
-            text_color: 0x3A3A3C
+            text: "Turn to choose a home"
+            text_color: 0x655C66
 
     - id: page_clean
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: TOP_MID
             y: 22
             text: "Washed container"
-            text_color: 0x8E8E93
+            text_color: 0xC6B4E9
         - label:
             id: lbl_clean_name
             align: CENTER
             y: -14
             text: ""
-            text_color: 0xFFFFFF
+            text_color: 0xFFF8EA
         - label:
             align: CENTER
             y: 30
-            text: "Press to choose storage"
-            text_color: 0x34C759
+            text: "Ready for its next home"
+            text_color: 0x91C788
         - label:
             align: BOTTOM_MID
             y: -24
-            text: "Hold to cancel"
-            text_color: 0x3A3A3C
+            text: "Press to choose storage"
+            text_color: 0x655C66
 
     - id: page_clean_location
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: TOP_MID
             y: 22
             text: "Store container"
-            text_color: 0x8E8E93
+            text_color: 0xC6B4E9
         - label:
             id: lbl_clean_location
             align: CENTER
             y: -12
             text: ""
-            text_color: 0xFFFFFF
+            text_color: 0xFFF8EA
         - label:
             align: CENTER
             y: 32
             text: "Press to save"
-            text_color: 0x34C759
+            text_color: 0x91C788
         - label:
             align: BOTTOM_MID
             y: -24
-            text: "Turn location"
-            text_color: 0x3A3A3C
+            text: "Turn to choose a home"
+            text_color: 0x655C66
 
     - id: page_done
-      bg_color: 0x0B0B0F
+      bg_color: 0x17131A
       widgets:
         - label:
             align: CENTER
-            y: -10
-            text: "Saved"
-            text_color: 0x34C759
+            y: -34
+            text: "ALL SET"
+            text_color: 0x91C788
         - label:
             align: CENTER
-            y: 28
-            text: "Press to scan"
-            text_color: 0x8E8E93
+            y: -2
+            text: "Your pantry is in order"
+            text_color: 0xFFF8EA
+        - label:
+            align: CENTER
+            y: 34
+            text: "Press to scan another tag"
+            text_color: 0xB8AEB8
 
-    - id: page_error
-      bg_color: 0x0B0B0F
+    - id: page_saving
+      bg_color: 0x17131A
       widgets:
         - label:
             align: CENTER
-            y: -30
-            text: "HA timeout"
-            text_color: 0xFF3B30
+            y: -26
+            text: "SAVING"
+            text_color: 0xF1C27D
         - label:
             align: CENTER
-            y: 6
-            text: "Check Mise en Place Assistant logs"
-            text_color: 0xFFFFFF
+            y: 8
+            text: "Putting your pantry in order"
+            text_color: 0xFFF8EA
         - label:
             align: CENTER
             y: 42
-            text: "Press to scan"
-            text_color: 0x8E8E93
+            text: "One moment..."
+            text_color: 0xB8AEB8
+
+    - id: page_error
+      bg_color: 0x17131A
+      widgets:
+        - label:
+            align: CENTER
+            y: -36
+            text: "NOT QUITE"
+            text_color: 0xF47B63
+        - label:
+            id: lbl_error_message
+            align: CENTER
+            y: -4
+            text: "Home Assistant did not reply"
+            text_color: 0xFFF8EA
+        - label:
+            align: CENTER
+            y: 42
+            text: "Press to try again"
+            text_color: 0xB8AEB8

@@ -9,11 +9,14 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this._showCreate ??= false;
     this._render();
     this._load();
+    this._subscribeToUpdates();
     this._timer ??= window.setInterval(() => this._load(), 15000);
   }
 
   disconnectedCallback() {
     this._connected = false;
+    this._eventUnsubscribe?.();
+    this._eventUnsubscribe = undefined;
     window.clearInterval(this._timer);
     this._timer = undefined;
   }
@@ -26,6 +29,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     if (!this._loadedOnce) {
       this._load();
     }
+    this._subscribeToUpdates();
   }
 
   set panel(panel) {
@@ -62,6 +66,26 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     }
   }
 
+  _subscribeToUpdates() {
+    const connection = this._hass?.connection;
+    if (!connection || this._eventUnsubscribe || this._eventSubscription) {
+      return;
+    }
+    this._eventSubscription = connection.subscribeEvents(
+      () => this._load(),
+      "mise_en_place_assistant.updated",
+    ).then((unsubscribe) => {
+      this._eventSubscription = undefined;
+      if (!this._connected || this._hass?.connection !== connection) {
+        unsubscribe();
+        return;
+      }
+      this._eventUnsubscribe = unsubscribe;
+    }).catch(() => {
+      this._eventSubscription = undefined;
+    });
+  }
+
   _render() {
     const data = this._data;
     if (!this.shadowRoot) {
@@ -70,6 +94,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const summary = data?.summary || {};
     const containers = data?.containers || [];
     const items = data?.items || [];
+    const foods = data?.foods || [];
     const locations = data?.locations || [];
     const logbook = data?.logbook || [];
     this.shadowRoot.innerHTML = `
@@ -143,6 +168,11 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         }
         label { display: grid; gap: 6px; font-size: 13px; font-weight: 650; }
         input {
+          width: 100%; border: 1px solid var(--divider-color); border-radius: 10px;
+          padding: 10px 11px; background: var(--primary-background-color);
+          color: var(--primary-text-color); font: inherit;
+        }
+        select {
           width: 100%; border: 1px solid var(--divider-color); border-radius: 10px;
           padding: 10px 11px; background: var(--primary-background-color);
           color: var(--primary-text-color); font: inherit;
@@ -222,7 +252,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           </div>
         </header>
         ${this._error ? `<div class="error">${this._safe(this._error)}</div>` : ""}
-        ${this._showCreate ? this._createForm(locations) : ""}
+        ${this._showCreate ? this._createForm(locations, foods) : ""}
         <section class="grid">
           ${this._metric("Containers", summary.containers ?? 0)}
           ${this._metric("Locations", summary.locations ?? 0)}
@@ -274,8 +304,9 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     return `<article class="card"><p class="muted">${this._safe(label)}</p><p class="metric ${klass}">${this._safe(value)}</p></article>`;
   }
 
-  _createForm(locations) {
+  _createForm(locations, foods) {
     const locationOptions = locations.map((location) => `<option value="${this._safe(location.name)}">${this._safe(location.name)}</option>`).join("");
+    const foodOptions = foods.map((food) => `<option value="${this._safe(food.id)}">${this._safe(food.label)}</option>`).join("");
     return `
       <form class="card form" id="create-form">
         <h2>Add a reusable container</h2>
@@ -283,13 +314,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <div class="form-grid">
           <label>NFC tag<input name="tag_id" required placeholder="04:A1:C2" /></label>
           <label>Container name<input name="name" placeholder="Freezer bin 1" /></label>
-          <label>Current food<input name="item_label" required placeholder="Chicken breast" /></label>
+          <label>Catalog food<select name="item_id" required><option value="">Choose a catalog food</option>${foodOptions}</select></label>
           <label>Quantity<input name="quantity" required type="number" min="0" step="any" value="1" /></label>
-          <label>Unit<input name="unit" value="items" placeholder="g, kg, ml, items" /></label>
           <label>Location<input name="location" list="locations" placeholder="Freezer" /></label>
           <datalist id="locations">${locationOptions}</datalist>
         </div>
-        <p class="muted">Compatible units reconcile in totals (for example, g and kg). Mass, volume, and package counts stay separate.</p>
+        <p class="muted">Food names and units come from the configured catalog. Container amounts remain local to each NFC tag.</p>
         <div class="actions"><button type="button" class="secondary" id="cancel-create">Cancel</button><button type="submit">Save container</button></div>
       </form>
     `;
@@ -301,9 +331,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const value = (name) => form.elements[name].value.trim();
     const data = {
       tag_id: value("tag_id"),
-      item_label: value("item_label"),
+      item_id: value("item_id"),
       quantity: Number(value("quantity")),
-      unit: value("unit") || "items",
     };
     if (value("name")) data.name = value("name");
     if (value("location")) data.location = value("location");

@@ -151,17 +151,17 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
         )
     ]
     empty_containers = [
-        _container_summary(container)
+        _container_summary(container, manager)
         for container in containers
         if container.get("state") == "empty"
     ]
     low_containers = [
-        _container_summary(container)
+        _container_summary(container, manager)
         for container in containers
         if 0 < float(container.get("quantity", 0)) <= 2
     ]
     dirty_containers = [
-        _container_summary(container)
+        _container_summary(container, manager)
         for container in containers
         if container.get("state") == "dirty"
     ]
@@ -178,8 +178,9 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
             "dirty": len(dirty_containers),
             "low": len(low_containers),
         },
-        "containers": [_container_summary(container) for container in containers],
+        "containers": [_container_summary(container, manager) for container in containers],
         "items": item_totals,
+        "foods": manager.catalog_items(),
         "locations": locations,
         "empty_containers": empty_containers[:8],
         "low_containers": low_containers[:8],
@@ -188,13 +189,13 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
     }
 
 
-def _container_summary(container: dict[str, Any]) -> dict[str, Any]:
+def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantInventory | None = None) -> dict[str, Any]:
     """Return display-safe container data."""
     return {
         "tag_id": container.get("tag_id"),
         "name": container.get("name") or "Container",
         "product_id": container.get("product_id"),
-        "item_label": container.get("item_label") or "No current item",
+        "item_label": manager.item_label_for_container(container) if manager else container.get("item_label") or "No current item",
         "format": container.get("item_format") or "",
         "quantity": container.get("display_quantity", container.get("quantity", 0)),
         "unit": container.get("unit") or "items",

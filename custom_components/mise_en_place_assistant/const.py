@@ -12,6 +12,15 @@ CONF_INITIAL_LOCATIONS = "initial_locations"
 CONF_M5DIAL_SERVICE_PREFIX = "m5dial_service_prefix"
 CONF_M5DIAL_DEVICE_ID = "m5dial_device_id"
 CONF_M5DIAL_EVENT_SOURCE = "m5dial_event_source"
+CONF_MEALIE_URL = "mealie_url"
+CONF_MEALIE_TOKEN = "mealie_token"
+CONF_MEALIE_ENTRY_ID = "mealie_entry_id"
+CONF_CATALOG_PROVIDER = "catalog_provider"
+PROVIDER_MEALIE = "mealie"
+PROVIDER_MOCKED = "mocked"
+CATALOG_PROVIDERS = [PROVIDER_MEALIE, PROVIDER_MOCKED]
+# Releases before provider selection always used the built-in catalog.
+DEFAULT_CATALOG_PROVIDER = PROVIDER_MOCKED
 
 CONTAINER_STATE_FILLED = "filled"
 CONTAINER_STATE_EMPTY = "empty"
@@ -29,35 +38,6 @@ DEFAULT_UNIT = "items"
 DEFAULT_M5DIAL_SERVICE_PREFIX = "m5dial_mise_en_place_assistant"
 DEFAULT_M5DIAL_EVENT_SOURCE = "m5dial-mise-en-place-assistant"
 
-MOCK_ITEMS = [
-    {
-        "id": "chicken_breast",
-        "label": "Chicken breast",
-        "format": "Vacuum pack",
-        "unit": "pieces",
-    },
-    {
-        "id": "beef_stew",
-        "label": "Beef stew",
-        "format": "1 L container",
-        "unit": "servings",
-    },
-    {
-        "id": "tomato_sauce",
-        "label": "Tomato sauce",
-        "format": "500 ml jar",
-        "unit": "jars",
-    },
-    {
-        "id": "berries",
-        "label": "Mixed berries",
-        "format": "Freezer bag",
-        "unit": "cups",
-    },
-]
-
-MOCK_LOCATIONS = ["Freezer", "Fridge", "Pantry", "Prep shelf"]
-
 EVENT_INVENTORY_CONFIRM = "esphome.inventory_confirm"
 EVENT_MISE_EN_PLACE_ASSISTANT_SCAN = "esphome.mise_en_place_assistant_scan"
 EVENT_MISE_EN_PLACE_ASSISTANT_CREATE_CONTAINER = "esphome.mise_en_place_assistant_create_container"
@@ -68,7 +48,6 @@ EVENT_MISE_EN_PLACE_ASSISTANT_UPDATED = "mise_en_place_assistant.updated"
 SERVICE_CREATE_CONTAINER = "create_container"
 SERVICE_CREATE_LOCATION = "create_location"
 SERVICE_FILL_CONTAINER = "fill_container"
-SERVICE_MOCK_API = "mock_api"
 SERVICE_REMOVE_ITEMS = "remove_items"
 SERVICE_SCAN_CONTAINER = "scan_container"
 SERVICE_UPDATE_CONTAINER = "update_container"
@@ -78,4 +57,4 @@ SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED = "mise_en_place_assistant_entity_ad
 
 STORAGE_KEY = DOMAIN
 # New fields are additive and normalized on load; keep existing inventory readable.
-STORAGE_VERSION = 3
+STORAGE_VERSION = 5

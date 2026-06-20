@@ -8,12 +8,31 @@
           "initial_locations": "Initial locations",
           "m5dial_service_prefix": "M5Dial ESPHome action prefix",
           "m5dial_device_id": "Enrolled M5Dial",
-          "m5dial_event_source": "M5Dial event source"
+          "m5dial_event_source": "M5Dial event source",
+          "catalog_provider": "Food catalog provider"
+        }
+      },
+      "mealie_entry": {
+        "title": "Connect Mealie",
+        "description": "Choose an existing Home Assistant Mealie integration.",
+        "data": {
+          "mealie_entry_id": "Mealie integration"
+        }
+      },
+      "mealie_manual": {
+        "title": "Connect Mealie",
+        "description": "No Home Assistant Mealie integration is configured. Enter its connection details.",
+        "data": {
+          "mealie_url": "Mealie URL",
+          "mealie_token": "Mealie API token"
         }
       }
     },
     "abort": {
       "single_instance_allowed": "Mise en Place Assistant is already configured."
+    },
+    "error": {
+      "invalid_mealie_connection": "Enter a valid Mealie URL and API token."
     }
   },
   "options": {
@@ -25,8 +44,14 @@
           "initial_locations": "Locations",
           "m5dial_service_prefix": "M5Dial ESPHome action prefix",
           "m5dial_device_id": "Enrolled M5Dial",
-          "m5dial_event_source": "M5Dial event source"
+          "m5dial_event_source": "M5Dial event source",
+          "catalog_provider": "Food catalog provider",
+          "mealie_url": "Mealie URL",
+          "mealie_token": "Mealie API token"
         }
+      },
+      "error": {
+        "invalid_mealie_connection": "Enter a valid Mealie URL and API token."
       }
     }
   },
