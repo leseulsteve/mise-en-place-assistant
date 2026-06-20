@@ -87,15 +87,11 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry: config_entries.ConfigEntry):
         """Create the options flow."""
-        return MiseEnPlaceAssistantOptionsFlow(config_entry)
+        return MiseEnPlaceAssistantOptionsFlow()
 
 
 class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
     """Handle Mise en Place Assistant options."""
-
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize the options flow."""
-        self.config_entry = config_entry
 
     async def async_step_init(self, user_input: dict | None = None):
         """Manage Mise en Place Assistant options."""
