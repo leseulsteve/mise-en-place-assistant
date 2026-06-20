@@ -56,8 +56,10 @@ MOCKED_STORAGE_LOCATIONS = [
 
 # Keep the offline provider useful for the prepared-meal workflow too.
 MOCKED_RECIPES = [
-    {"id": "mocked:recipe:chicken-curry", "label": "Chicken curry", "format": "Batch-friendly curry", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:chicken"], "categories": ["Dinner"]},
-    {"id": "mocked:recipe:roast-chicken", "label": "Roast chicken", "format": "Portioned roast chicken", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:chicken"], "categories": ["Dinner"]},
+    {"id": "mocked:recipe:chicken-curry", "label": "Chicken curry", "format": "Batch-friendly curry", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:poultry"], "categories": ["Dinner"]},
+    {"id": "mocked:recipe:roast-chicken", "label": "Roast chicken", "format": "Portioned roast chicken", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:poultry"], "categories": ["Dinner"]},
+    {"id": "mocked:recipe:beef-stew", "label": "Beef stew", "format": "Portioned braise", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:red-meat"], "categories": ["Dinner"]},
+    {"id": "mocked:recipe:salmon", "label": "Salmon portions", "format": "Ready fish portions", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:fish"], "categories": ["Dinner"]},
     {"id": "mocked:recipe:lentil-loaf", "label": "Lentil loaf", "format": "Vegetarian protein", "unit": "portions", "tags": ["mpa:component:protein", "mpa:primary-protein:vegetarian"], "categories": ["Dinner"]},
     {"id": "mocked:recipe:roast-vegetables", "label": "Roast vegetables", "format": "Ready vegetable side", "unit": "portions", "tags": ["mpa:component:vegetable"], "categories": ["Side"]},
     {"id": "mocked:recipe:rice", "label": "Cooked basmati rice", "format": "Ready starch", "unit": "portions", "tags": ["mpa:component:starch"], "categories": ["Side"]},

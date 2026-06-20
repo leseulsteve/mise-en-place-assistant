@@ -155,9 +155,10 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
         else getattr(areas, "areas", {}).values()
     )
     area_options = [
-        {"id": area.id, "name": area.name}
+        {"id": area.id, "name": area.name, "icon": getattr(area, "icon", None)}
         for area in sorted(area_entries, key=lambda area: area.name.casefold())
     ]
+    entity_options = _entity_options(manager.hass)
     locations = []
     for location in manager.storage_locations():
         area = areas.async_get_area(location.get("area_id")) if location.get("area_id") else None
@@ -166,6 +167,7 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
                 **location,
                 "containers": manager.location_count(location["id"]),
                 "area_name": area.name if area else None,
+                "area_icon": getattr(area, "icon", None) if area else None,
                 "health": manager.location_health(location),
             }
         )
@@ -271,11 +273,30 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
             "attention_total": len(product_attention) + len(empty_containers) + len(low_containers) + storage_attention["attention_count"],
         },
         "areas": area_options,
+        "entities": entity_options,
         "locations": locations,
         "empty_containers": empty_containers[:8],
         "low_containers": low_containers[:8],
         "logbook": list(reversed(manager.logbook[-50:])),
     }
+
+
+def _entity_options(hass: HomeAssistant) -> list[dict[str, str]]:
+    """Return entity choices the panel can use in storage monitoring forms."""
+    options = []
+    for state in hass.states.async_all():
+        domain = state.entity_id.split(".", 1)[0]
+        if domain not in {"binary_sensor", "sensor", "switch"}:
+            continue
+        name = state.attributes.get("friendly_name") or state.name or state.entity_id
+        options.append(
+            {
+                "entity_id": state.entity_id,
+                "domain": domain,
+                "name": str(name),
+            }
+        )
+    return sorted(options, key=lambda entity: (entity["domain"], entity["name"].casefold(), entity["entity_id"]))
 
 
 def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantInventory | None = None) -> dict[str, Any]:
@@ -293,6 +314,7 @@ def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantI
         "canonical_unit": container.get("canonical_unit", container.get("unit")) or "items",
         "location_id": container.get("location_id") or "",
         "location": container.get("location") or "Unassigned",
+        "sublocation": container.get("sublocation") or "",
         "content_kind": container.get("content_kind") or "empty",
         "best_before_date": container.get("best_before_date") or "",
         "purchased_date": container.get("purchased_date") or "",

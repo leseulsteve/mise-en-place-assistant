@@ -9,15 +9,17 @@ from datetime import timedelta
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryNotReady
-from homeassistant.core import HomeAssistant, ServiceCall, callback
+from homeassistant.const import STATE_HOME, STATE_ON
+from homeassistant.core import Event, HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     CONF_M5DIAL_SERVICE_PREFIX,
     CONF_M5DIAL_EVENT_SOURCE,
+    CONF_M5DIAL_PRESENCE_ENTITY_IDS,
     DEFAULT_UNIT,
     DEFAULT_M5DIAL_SERVICE_PREFIX,
     DOMAIN,
@@ -42,6 +44,7 @@ from .const import (
     SERVICE_REMOVE_ITEMS,
     SERVICE_RESTORE_CONTAINER,
     SERVICE_SCAN_CONTAINER,
+    SERVICE_SIMULATE_CRUD,
     SERVICE_UPDATE_CONTAINER,
     PROVIDER_MOCKED,
     LOCATION_TYPES,
@@ -70,6 +73,8 @@ ATTR_RECIPE_ID = "recipe_id"
 ATTR_CONTENT_KIND = "content_kind"
 ATTR_LOCATION_ID = "location_id"
 ATTR_LOCATION_TYPE = "location_type"
+ATTR_SUBLOCATION = "sublocation"
+ATTR_SUBLOCATIONS = "sublocations"
 ATTR_AREA_ID = "area_id"
 ATTR_SENSORS = "sensors"
 ATTR_MONITORING = "monitoring"
@@ -87,6 +92,7 @@ ATTR_SOURCE_PROVIDER = "source_provider"
 
 SCAN_MODES = ["set", "add", "remove"]
 DIAL_REQUEST_TIMEOUT = timedelta(seconds=30)
+PRESENCE_ACTIVE_STATES = {STATE_ON, STATE_HOME, "detected", "present"}
 
 
 def _nonnegative_number(value) -> int | float:
@@ -149,9 +155,15 @@ def _location_data(call: ServiceCall) -> dict:
     for key in ("temperature_min", "temperature_max"):
         if key in monitoring:
             monitoring[key] = _finite_number(monitoring[key])
+    sublocations = call.data.get(ATTR_SUBLOCATIONS, [])
+    if isinstance(sublocations, str):
+        sublocations = [value.strip() for value in sublocations.split(",")]
+    if not isinstance(sublocations, list) or any(not isinstance(value, str) for value in sublocations):
+        raise ServiceValidationError("sublocations must be a list of names")
     return {
         "name": call.data.get(ATTR_NAME),
         "location_type": call.data.get(ATTR_LOCATION_TYPE, "other"),
+        "sublocations": sublocations,
         "area_id": call.data.get(ATTR_AREA_ID),
         "sensors": sensors,
         "monitoring": monitoring,
@@ -183,7 +195,9 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async def handle_move_container(call: ServiceCall) -> None:
         try:
             await _manager(hass).async_update_container(
-                tag_id=call.data[ATTR_TAG_ID], location_id=call.data[ATTR_LOCATION_ID]
+                tag_id=call.data[ATTR_TAG_ID],
+                location_id=call.data[ATTR_LOCATION_ID],
+                sublocation=call.data.get(ATTR_SUBLOCATION),
             )
         except (KeyError, ValueError) as err:
             raise ServiceValidationError(str(err)) from err
@@ -238,6 +252,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 purchased_date=call.data.get(ATTR_PURCHASED_DATE),
                 opened_date=call.data.get(ATTR_OPENED_DATE),
                 price=call.data.get(ATTR_PRICE),
+                sublocation=call.data.get(ATTR_SUBLOCATION),
             )
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
@@ -251,6 +266,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 tag_id=call.data[ATTR_TAG_ID], name=call.data.get(ATTR_NAME),
                 quantity=call.data.get(ATTR_QUANTITY, 0), location=call.data.get(ATTR_LOCATION),
                 location_id=call.data.get(ATTR_LOCATION_ID),
+                sublocation=call.data.get(ATTR_SUBLOCATION),
             )
         except (MealieCatalogError, ValueError) as err:
             raise ServiceValidationError(str(err)) from err
@@ -288,6 +304,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 purchased_date=call.data.get(ATTR_PURCHASED_DATE),
                 opened_date=call.data.get(ATTR_OPENED_DATE),
                 price=call.data.get(ATTR_PRICE),
+                sublocation=call.data.get(ATTR_SUBLOCATION),
             )
         except (KeyError, ValueError) as err:
             raise ServiceValidationError(
@@ -351,6 +368,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 if isinstance(err, KeyError) else str(err)
             ) from err
 
+    async def handle_simulate_crud(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_simulate_crud()
+        except (KeyError, ValueError) as err:
+            raise ServiceValidationError(
+                f"Unknown Mise en Place Assistant record: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
+            ) from err
+
     async def handle_add_to_shopping_list(call: ServiceCall) -> None:
         try:
             await _manager(hass).async_add_to_shopping_list(
@@ -394,6 +420,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             {
                 vol.Optional(ATTR_NAME, default=""): cv.string,
                 vol.Optional(ATTR_LOCATION_TYPE, default="other"): vol.In(LOCATION_TYPES),
+                vol.Optional(ATTR_SUBLOCATIONS, default=[]): vol.Any([cv.string], cv.string),
                 vol.Optional(ATTR_AREA_ID): cv.string,
                 vol.Optional(ATTR_SENSORS, default={}): dict,
                 vol.Optional(ATTR_MONITORING, default={}): dict,
@@ -409,6 +436,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Required(ATTR_LOCATION_ID): cv.string,
                 vol.Optional(ATTR_NAME, default=""): cv.string,
                 vol.Optional(ATTR_LOCATION_TYPE, default="other"): vol.In(LOCATION_TYPES),
+                vol.Optional(ATTR_SUBLOCATIONS, default=[]): vol.Any([cv.string], cv.string),
                 vol.Optional(ATTR_AREA_ID): cv.string,
                 vol.Optional(ATTR_SENSORS, default={}): dict,
                 vol.Optional(ATTR_MONITORING, default={}): dict,
@@ -429,6 +457,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             {
                 vol.Required(ATTR_TAG_ID): cv.string,
                 vol.Required(ATTR_LOCATION_ID): cv.string,
+                vol.Optional(ATTR_SUBLOCATION): cv.string,
             }
         ),
     )
@@ -463,6 +492,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_QUANTITY, default=0): _nonnegative_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
                 vol.Optional(ATTR_LOCATION_ID): cv.string,
+                vol.Optional(ATTR_SUBLOCATION): cv.string,
             }
         ),
     )
@@ -477,6 +507,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_QUANTITY, default=0): _nonnegative_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
                 vol.Optional(ATTR_LOCATION_ID): cv.string,
+                vol.Optional(ATTR_SUBLOCATION): cv.string,
                 vol.Required(ATTR_ITEM_ID): cv.string,
                 vol.Optional(ATTR_BEST_BEFORE_DATE): cv.string,
                 vol.Optional(ATTR_PURCHASED_DATE): cv.string,
@@ -497,6 +528,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_DELTA): _finite_number,
                 vol.Optional(ATTR_LOCATION): cv.string,
                 vol.Optional(ATTR_LOCATION_ID): cv.string,
+                vol.Optional(ATTR_SUBLOCATION): cv.string,
                 vol.Optional(ATTR_UNIT): cv.string,
                 vol.Optional(ATTR_ITEM_ID): cv.string,
                 vol.Optional(ATTR_BEST_BEFORE_DATE): cv.string,
@@ -539,6 +571,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_MODE, default="set"): vol.In(SCAN_MODES),
             }
         ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SIMULATE_CRUD,
+        handle_simulate_crud,
+        schema=vol.Schema({}),
     )
     hass.services.async_register(
         DOMAIN,
@@ -657,6 +695,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.info("Called ESPHome action esphome.%s successfully", service)
         except HomeAssistantError as err:
             _LOGGER.warning("Could not call ESPHome action esphome.%s: %s", service, err)
+
+    def _configured_presence_entities() -> list[str]:
+        configured = entry.options.get(
+            CONF_M5DIAL_PRESENCE_ENTITY_IDS,
+            entry.data.get(CONF_M5DIAL_PRESENCE_ENTITY_IDS, []),
+        )
+        return [entity_id for entity_id in configured if isinstance(entity_id, str)]
+
+    def _any_presence_nearby(entity_ids: list[str]) -> bool:
+        return any(
+            (state := hass.states.get(entity_id)) is not None
+            and str(state.state).lower() in PRESENCE_ACTIVE_STATES
+            for entity_id in entity_ids
+        )
+
+    async def _async_publish_idle_presence(entity_ids: list[str]) -> None:
+        """Tell the Dial whether HA presence should allow its idle clock."""
+        if not entity_ids:
+            return
+        nearby = _any_presence_nearby(entity_ids)
+        _LOGGER.debug(
+            "Publishing M5Dial idle presence: nearby=%s entities=%s",
+            nearby,
+            entity_ids,
+        )
+        await call_m5dial("set_idle_presence", {"nearby": nearby})
+
+    presence_entity_ids = _configured_presence_entities()
+    if presence_entity_ids:
+        @callback
+        def _handle_idle_presence_state_change(event: Event) -> None:
+            hass.async_create_task(_async_publish_idle_presence(presence_entity_ids))
+
+        entry.async_on_unload(
+            async_track_state_change_event(
+                hass,
+                presence_entity_ids,
+                _handle_idle_presence_state_change,
+            )
+        )
+        hass.async_create_task(_async_publish_idle_presence(presence_entity_ids))
 
     def _event_request_id(event) -> int:
         """Return the Dial request id, or 0 for older firmware."""

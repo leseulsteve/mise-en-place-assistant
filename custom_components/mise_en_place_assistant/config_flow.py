@@ -7,6 +7,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.const import CONF_API_TOKEN, CONF_HOST
 from homeassistant.core import callback
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import selector
 
 from .const import (
@@ -23,11 +24,11 @@ from .const import (
     CONF_M5DIAL_SERVICE_PREFIX,
     CONF_M5DIAL_DEVICE_ID,
     CONF_M5DIAL_EVENT_SOURCE,
+    CONF_M5DIAL_PRESENCE_ENTITY_IDS,
     CONF_MEALIE_TOKEN,
     CONF_MEALIE_ENTRY_ID,
     CONF_MEALIE_URL,
     CONF_SHOPPING_LIST_PROVIDER,
-    DEFAULT_CATALOG_PROVIDER,
     DEFAULT_M5DIAL_EVENT_SOURCE,
     DEFAULT_M5DIAL_SERVICE_PREFIX,
     DOMAIN,
@@ -110,25 +111,14 @@ def _optional_positive_int(value) -> int | None:
     return _positive_int(value)
 
 
-def _catalog_providers(value) -> list[str]:
-    """Normalize live provider selection to a unique list."""
-    if value is None:
-        return []
-    values = value if isinstance(value, list) else [value]
-    providers: list[str] = []
-    for provider in values:
-        if provider == PROVIDER_MOCKED:
-            continue
-        if provider not in CATALOG_PROVIDERS:
-            raise vol.Invalid("unsupported catalog provider")
-        if provider not in providers:
-            providers.append(provider)
-    return providers
-
-
 def _dev_mode(value) -> bool:
     """Normalize the developer fallback switch."""
     return bool(value)
+
+
+def _providers_for_dev_mode(dev_mode: bool) -> list[str]:
+    """Return the configured catalog providers implied by the DEV switch."""
+    return [] if dev_mode else list(CATALOG_PROVIDERS)
 
 
 def _validate_provider_choice(providers: list[str], dev_mode: bool) -> None:
@@ -153,16 +143,6 @@ def _validate_kitchenowl_config(user_input: dict, dev_mode: bool) -> None:
     _positive_int(user_input.get(CONF_KITCHENOWL_SHOPPING_LIST_ID))
 
 
-def _provider_selector():
-    """Return a multi-provider selector for config and options flows."""
-    return selector.SelectSelector(
-        selector.SelectSelectorConfig(
-            options=CATALOG_PROVIDERS,
-            multiple=True,
-        )
-    )
-
-
 def _shopping_provider_selector():
     """Return shopping-list target selector."""
     return selector.SelectSelector(
@@ -170,6 +150,29 @@ def _shopping_provider_selector():
             options=SHOPPING_LIST_PROVIDERS,
         )
     )
+
+
+def _presence_entity_selector():
+    """Return an entity selector for HA-owned Dial idle presence inputs."""
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            domain=["binary_sensor", "device_tracker", "person"],
+            multiple=True,
+        )
+    )
+
+
+def _entity_ids(value) -> list[str]:
+    """Normalize a selector value to unique Home Assistant entity IDs."""
+    if value in (None, ""):
+        return []
+    raw_values = value if isinstance(value, list) else [value]
+    entity_ids: list[str] = []
+    for raw_entity_id in raw_values:
+        entity_id = cv.entity_id(raw_entity_id)
+        if entity_id not in entity_ids:
+            entity_ids.append(entity_id)
+    return entity_ids
 
 
 def _optional_device_field(default: str | None = None):
@@ -187,6 +190,23 @@ def _optional_kitchenowl_list_field(default: int | None = None):
 def _kitchenowl_list_value(user_input: dict) -> int | None:
     """Normalize the optional KitchenOwl shopping list id."""
     return _optional_positive_int(user_input.get(CONF_KITCHENOWL_SHOPPING_LIST_ID))
+
+
+def _provider_url_value(user_input: dict, key: str, current: str, dev_mode: bool) -> str:
+    """Preserve hidden live-provider settings while DEV mode is enabled."""
+    if dev_mode and key not in user_input:
+        return current
+    return user_input.get(key, "")
+
+
+def _hidden_value(user_input: dict, key: str, current):
+    """Preserve a stored option when its form field is hidden."""
+    return current if key not in user_input else user_input.get(key)
+
+
+def _kitchenowl_selected(user_input: dict, current: str = SHOPPING_LIST_PROVIDER_AUTO) -> bool:
+    """Return whether the form should show KitchenOwl connection fields."""
+    return user_input.get(CONF_SHOPPING_LIST_PROVIDER, current) == PROVIDER_KITCHENOWL
 
 
 def _needs_mealie(providers: list[str]) -> bool:
@@ -216,8 +236,8 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_abort(reason="single_instance_allowed")
 
         if user_input is not None:
-            dev_mode = _dev_mode(user_input.get(CONF_DEV_MODE, False))
-            providers = [] if dev_mode else _catalog_providers(user_input[CONF_CATALOG_PROVIDERS])
+            dev_mode = _dev_mode(user_input.get(CONF_DEV_MODE, True))
+            providers = _providers_for_dev_mode(dev_mode)
             try:
                 _validate_provider_choice(providers, dev_mode)
                 _validate_kitchenowl_config(user_input, dev_mode)
@@ -228,14 +248,13 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     errors={"base": "provider_required" if not dev_mode and set(providers) != set(CATALOG_PROVIDERS) else "invalid_provider_connection"},
                 )
             self._entry_data = {
-                CONF_INITIAL_LOCATIONS: _locations_from_text(user_input.get(CONF_INITIAL_LOCATIONS, "")),
-                CONF_M5DIAL_SERVICE_PREFIX: user_input.get(
-                    CONF_M5DIAL_SERVICE_PREFIX, DEFAULT_M5DIAL_SERVICE_PREFIX
-                ).strip(),
+                CONF_INITIAL_LOCATIONS: _locations_from_text("Pantry, Freezer, Fridge"),
+                CONF_M5DIAL_SERVICE_PREFIX: DEFAULT_M5DIAL_SERVICE_PREFIX,
                 CONF_M5DIAL_DEVICE_ID: user_input.get(CONF_M5DIAL_DEVICE_ID),
-                CONF_M5DIAL_EVENT_SOURCE: user_input.get(
-                    CONF_M5DIAL_EVENT_SOURCE, DEFAULT_M5DIAL_EVENT_SOURCE
-                ).strip(),
+                CONF_M5DIAL_EVENT_SOURCE: DEFAULT_M5DIAL_EVENT_SOURCE,
+                CONF_M5DIAL_PRESENCE_ENTITY_IDS: _entity_ids(
+                    user_input.get(CONF_M5DIAL_PRESENCE_ENTITY_IDS)
+                ),
                 CONF_CATALOG_PROVIDERS: providers,
                 CONF_DEV_MODE: dev_mode,
                 CONF_SHOPPING_LIST_PROVIDER: user_input.get(
@@ -260,45 +279,39 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def _user_schema(self, user_input: dict | None = None) -> vol.Schema:
         """Return the setup form schema."""
-        return vol.Schema(
-            {
-                vol.Optional(
-                    CONF_INITIAL_LOCATIONS,
-                    default=(user_input or {}).get(CONF_INITIAL_LOCATIONS, "Pantry, Freezer, Fridge"),
-                ): str,
-                vol.Optional(
-                    CONF_M5DIAL_SERVICE_PREFIX,
-                    default=(user_input or {}).get(CONF_M5DIAL_SERVICE_PREFIX, DEFAULT_M5DIAL_SERVICE_PREFIX),
-                ): str,
-                _optional_device_field((user_input or {}).get(CONF_M5DIAL_DEVICE_ID)): selector.DeviceSelector(
-                    selector.DeviceSelectorConfig(integration="esphome")
-                ),
-                vol.Optional(
-                    CONF_M5DIAL_EVENT_SOURCE,
-                    default=(user_input or {}).get(CONF_M5DIAL_EVENT_SOURCE, DEFAULT_M5DIAL_EVENT_SOURCE),
-                ): str,
-                vol.Required(
-                    CONF_CATALOG_PROVIDERS,
-                    default=(user_input or {}).get(CONF_CATALOG_PROVIDERS, CATALOG_PROVIDERS),
-                ): _provider_selector(),
-                vol.Optional(CONF_DEV_MODE, default=(user_input or {}).get(CONF_DEV_MODE, False)): selector.BooleanSelector(),
-                vol.Optional(
-                    CONF_SHOPPING_LIST_PROVIDER,
-                    default=(user_input or {}).get(CONF_SHOPPING_LIST_PROVIDER, SHOPPING_LIST_PROVIDER_AUTO),
-                ): _shopping_provider_selector(),
-                vol.Optional(
-                    CONF_KITCHENOWL_URL,
-                    default=(user_input or {}).get(CONF_KITCHENOWL_URL, ""),
-                ): str,
-                vol.Optional(
-                    CONF_KITCHENOWL_TOKEN,
-                    default=(user_input or {}).get(CONF_KITCHENOWL_TOKEN, ""),
-                ): str,
-                _optional_kitchenowl_list_field(
-                    (user_input or {}).get(CONF_KITCHENOWL_SHOPPING_LIST_ID)
-                ): str,
-            }
-        )
+        form_input = user_input or {}
+        dev_mode = _dev_mode((user_input or {}).get(CONF_DEV_MODE, True))
+        schema: dict = {
+            vol.Optional(CONF_DEV_MODE, default=dev_mode): selector.BooleanSelector(),
+            _optional_device_field(form_input.get(CONF_M5DIAL_DEVICE_ID)): selector.DeviceSelector(
+                selector.DeviceSelectorConfig(integration="esphome")
+            ),
+            vol.Optional(
+                CONF_M5DIAL_PRESENCE_ENTITY_IDS,
+                default=form_input.get(CONF_M5DIAL_PRESENCE_ENTITY_IDS, []),
+            ): _presence_entity_selector(),
+            vol.Optional(
+                CONF_SHOPPING_LIST_PROVIDER,
+                default=form_input.get(CONF_SHOPPING_LIST_PROVIDER, SHOPPING_LIST_PROVIDER_AUTO),
+            ): _shopping_provider_selector(),
+        }
+        if _kitchenowl_selected(form_input):
+            schema.update(
+                {
+                    vol.Optional(
+                        CONF_KITCHENOWL_URL,
+                        default=form_input.get(CONF_KITCHENOWL_URL, ""),
+                    ): str,
+                    vol.Optional(
+                        CONF_KITCHENOWL_TOKEN,
+                        default=form_input.get(CONF_KITCHENOWL_TOKEN, ""),
+                    ): str,
+                    _optional_kitchenowl_list_field(
+                        form_input.get(CONF_KITCHENOWL_SHOPPING_LIST_ID)
+                    ): str,
+                }
+            )
+        return vol.Schema(schema)
 
     def _finish_or_continue_provider_setup(self):
         """Continue provider credential collection or create the entry."""
@@ -457,6 +470,10 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
                 CONF_M5DIAL_EVENT_SOURCE, DEFAULT_M5DIAL_EVENT_SOURCE
             ),
         )
+        current_presence_entities = self.config_entry.options.get(
+            CONF_M5DIAL_PRESENCE_ENTITY_IDS,
+            self.config_entry.data.get(CONF_M5DIAL_PRESENCE_ENTITY_IDS, []),
+        )
         current_mealie_url = self.config_entry.options.get(
             CONF_MEALIE_URL, self.config_entry.data.get(CONF_MEALIE_URL, "")
         )
@@ -488,18 +505,11 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
             self.config_entry.data.get(CONF_DEV_MODE, False)
             or self.config_entry.data.get(CONF_CATALOG_PROVIDER) == PROVIDER_MOCKED,
         )
-        current_providers = self.config_entry.options.get(
-            CONF_CATALOG_PROVIDERS,
-            self.config_entry.data.get(
-                CONF_CATALOG_PROVIDERS,
-                [self.config_entry.data.get(CONF_CATALOG_PROVIDER, DEFAULT_CATALOG_PROVIDER)],
-            ),
-        )
-        current_providers = [] if current_dev_mode else _catalog_providers(current_providers)
-
+        visible_dev_mode = _dev_mode((user_input or {}).get(CONF_DEV_MODE, current_dev_mode))
+        visible_shopping_provider = (user_input or {}).get(CONF_SHOPPING_LIST_PROVIDER, current_shopping_provider)
         if user_input is not None:
-            dev_mode = _dev_mode(user_input.get(CONF_DEV_MODE, False))
-            providers = [] if dev_mode else _catalog_providers(user_input[CONF_CATALOG_PROVIDERS])
+            dev_mode = visible_dev_mode
+            providers = _providers_for_dev_mode(dev_mode)
             try:
                 _validate_provider_choice(providers, dev_mode)
                 if _needs_mealie(providers):
@@ -515,62 +525,63 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
                 return self.async_create_entry(
                     title="",
                     data={
-                        CONF_INITIAL_LOCATIONS: _locations_from_text(
-                            user_input.get(CONF_INITIAL_LOCATIONS, "")
-                        ),
-                        CONF_M5DIAL_SERVICE_PREFIX: user_input.get(
-                            CONF_M5DIAL_SERVICE_PREFIX, DEFAULT_M5DIAL_SERVICE_PREFIX
-                        ).strip(),
+                        CONF_INITIAL_LOCATIONS: _locations_from_text(current_locations),
+                        CONF_M5DIAL_SERVICE_PREFIX: current_prefix,
                         CONF_M5DIAL_DEVICE_ID: user_input.get(CONF_M5DIAL_DEVICE_ID),
-                        CONF_M5DIAL_EVENT_SOURCE: user_input.get(
-                            CONF_M5DIAL_EVENT_SOURCE, DEFAULT_M5DIAL_EVENT_SOURCE
-                        ).strip(),
-                        CONF_MEALIE_URL: user_input.get(CONF_MEALIE_URL, ""),
-                        CONF_MEALIE_TOKEN: user_input.get(CONF_MEALIE_TOKEN, "").strip(),
-                        CONF_GROCY_URL: user_input.get(CONF_GROCY_URL, ""),
-                        CONF_GROCY_TOKEN: user_input.get(CONF_GROCY_TOKEN, "").strip(),
+                        CONF_M5DIAL_EVENT_SOURCE: current_source,
+                        CONF_M5DIAL_PRESENCE_ENTITY_IDS: _entity_ids(
+                            user_input.get(CONF_M5DIAL_PRESENCE_ENTITY_IDS)
+                        ),
+                        CONF_MEALIE_URL: _provider_url_value(user_input, CONF_MEALIE_URL, current_mealie_url, dev_mode),
+                        CONF_MEALIE_TOKEN: _provider_url_value(user_input, CONF_MEALIE_TOKEN, current_mealie_token, dev_mode).strip(),
+                        CONF_GROCY_URL: _provider_url_value(user_input, CONF_GROCY_URL, current_grocy_url, dev_mode),
+                        CONF_GROCY_TOKEN: _provider_url_value(user_input, CONF_GROCY_TOKEN, current_grocy_token, dev_mode).strip(),
                         CONF_SHOPPING_LIST_PROVIDER: user_input.get(
                             CONF_SHOPPING_LIST_PROVIDER, SHOPPING_LIST_PROVIDER_AUTO
                         ),
-                        CONF_KITCHENOWL_URL: user_input.get(CONF_KITCHENOWL_URL, ""),
-                        CONF_KITCHENOWL_TOKEN: user_input.get(CONF_KITCHENOWL_TOKEN, "").strip(),
-                        CONF_KITCHENOWL_SHOPPING_LIST_ID: _kitchenowl_list_value(user_input),
+                        CONF_KITCHENOWL_URL: str(_hidden_value(user_input, CONF_KITCHENOWL_URL, current_kitchenowl_url) or ""),
+                        CONF_KITCHENOWL_TOKEN: str(_hidden_value(user_input, CONF_KITCHENOWL_TOKEN, current_kitchenowl_token) or "").strip(),
+                        CONF_KITCHENOWL_SHOPPING_LIST_ID: (
+                            _kitchenowl_list_value(user_input)
+                            if CONF_KITCHENOWL_SHOPPING_LIST_ID in user_input
+                            else current_kitchenowl_list_id
+                        ),
                         CONF_CATALOG_PROVIDERS: providers,
                         CONF_CATALOG_PROVIDER: providers[0] if providers else "",
                         CONF_DEV_MODE: dev_mode,
                     },
                 )
 
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema(
+        schema: dict = {
+            vol.Optional(CONF_DEV_MODE, default=visible_dev_mode): selector.BooleanSelector(),
+            _optional_device_field(current_m5dial): selector.DeviceSelector(
+                selector.DeviceSelectorConfig(integration="esphome")
+            ),
+            vol.Optional(
+                CONF_M5DIAL_PRESENCE_ENTITY_IDS,
+                default=current_presence_entities,
+            ): _presence_entity_selector(),
+            vol.Optional(CONF_SHOPPING_LIST_PROVIDER, default=visible_shopping_provider): _shopping_provider_selector(),
+        }
+        if visible_shopping_provider == PROVIDER_KITCHENOWL:
+            schema.update(
                 {
-                    vol.Optional(
-                        CONF_INITIAL_LOCATIONS,
-                        default=current_locations,
-                    ): str,
-                    vol.Optional(
-                        CONF_M5DIAL_SERVICE_PREFIX,
-                        default=current_prefix,
-                    ): str,
-                    _optional_device_field(current_m5dial): selector.DeviceSelector(
-                        selector.DeviceSelectorConfig(integration="esphome")
-                    ),
-                    vol.Optional(
-                        CONF_M5DIAL_EVENT_SOURCE,
-                        default=current_source,
-                    ): str,
-                    vol.Required(CONF_CATALOG_PROVIDERS, default=current_providers): _provider_selector(),
-                    vol.Optional(CONF_DEV_MODE, default=current_dev_mode): selector.BooleanSelector(),
-                    vol.Optional(CONF_MEALIE_URL, default=current_mealie_url): str,
-                    vol.Optional(CONF_MEALIE_TOKEN, default=current_mealie_token): str,
-                    vol.Optional(CONF_GROCY_URL, default=current_grocy_url): str,
-                    vol.Optional(CONF_GROCY_TOKEN, default=current_grocy_token): str,
-                    vol.Optional(CONF_SHOPPING_LIST_PROVIDER, default=current_shopping_provider): _shopping_provider_selector(),
                     vol.Optional(CONF_KITCHENOWL_URL, default=current_kitchenowl_url): str,
                     vol.Optional(CONF_KITCHENOWL_TOKEN, default=current_kitchenowl_token): str,
                     _optional_kitchenowl_list_field(current_kitchenowl_list_id): str,
                 }
-            ),
+            )
+        if not visible_dev_mode:
+            schema.update(
+                {
+                    vol.Optional(CONF_MEALIE_URL, default=current_mealie_url): str,
+                    vol.Optional(CONF_MEALIE_TOKEN, default=current_mealie_token): str,
+                    vol.Optional(CONF_GROCY_URL, default=current_grocy_url): str,
+                    vol.Optional(CONF_GROCY_TOKEN, default=current_grocy_token): str,
+                }
+            )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(schema),
             errors=errors,
         )

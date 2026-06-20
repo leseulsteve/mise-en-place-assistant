@@ -54,11 +54,15 @@ const panel = new Panel();
 let inventoryUpdated;
 let eventsUnsubscribed = false;
 let overviewRequests = 0;
+const serviceCalls = [];
 panel.hass = {
+  callService: async (domain, service, data) => {
+    serviceCalls.push({ domain, service, data });
+  },
   callWS: async () => {
     overviewRequests += 1;
     return {
-    summary: { containers: 1, locations: 1, items: 1, low: 0, dirty: 0 },
+    summary: { containers: 2, locations: 2, items: 1, foods: 2, recipes: 1, low: 1, dirty: 0 },
     containers: [{
       tag_id: "demo:sauce",
       name: "Sauce tub",
@@ -67,7 +71,9 @@ panel.hass = {
       unit: "cups",
       canonical_quantity: 2,
       canonical_unit: "cups",
+      location_id: "fridge",
       location: "Fridge",
+      sublocation: "Top shelf",
       content_kind: "meal",
       recipe: {
         id: "mocked:recipe:sauce",
@@ -79,6 +85,18 @@ panel.hass = {
         component: "sauce",
         primary_protein: "",
       },
+    }, {
+      tag_id: "demo:peas",
+      name: "Freezer bin",
+      item_label: "Frozen peas",
+      quantity: 0,
+      unit: "bags",
+      canonical_quantity: 0,
+      canonical_unit: "bags",
+      location_id: "freezer",
+      location: "Freezer",
+      sublocation: "Door bin",
+      content_kind: "ingredient",
     }],
     items: [{
       product_id: "product_tomatoes",
@@ -107,8 +125,63 @@ panel.hass = {
         message: "Grocy stock was updated for Sauce tub.",
       },
     }],
-    locations: [],
-    areas: [],
+    locations: [{
+      id: "fridge",
+      name: "Fridge",
+      location_type: "fridge",
+      area_id: "kitchen",
+      area_name: "Kitchen",
+      area_icon: "mdi:silverware-fork-knife",
+      sensors: {
+        temperature: "sensor.fridge_temperature",
+        door: "binary_sensor.fridge_door",
+        power_switch: "switch.fridge_plug",
+      },
+      monitoring: {},
+      sublocations: ["Top shelf"],
+      containers: 1,
+      health: {
+        status: "ok",
+        problems: [],
+        readings: {
+          temperature: { entity_id: "sensor.fridge_temperature", state: "37", unit: "°F" },
+          door: { entity_id: "binary_sensor.fridge_door", state: "off" },
+          power_switch: { entity_id: "switch.fridge_plug", state: "on" },
+        },
+      },
+    }, {
+      id: "freezer",
+      name: "Freezer",
+      location_type: "freezer",
+      area_id: "kitchen",
+      area_name: "Kitchen",
+      area_icon: "mdi:silverware-fork-knife",
+      sensors: {},
+      monitoring: {},
+      sublocations: ["Door bin"],
+      containers: 1,
+      health: {
+        status: "not_configured",
+        problems: [],
+        readings: {},
+      },
+    }],
+    areas: [{ id: "kitchen", name: "Kitchen", icon: "mdi:silverware-fork-knife" }],
+    entities: [
+      { entity_id: "binary_sensor.fridge_door", domain: "binary_sensor", name: "Fridge Door" },
+      { entity_id: "sensor.fridge_humidity", domain: "sensor", name: "Fridge Humidity" },
+      { entity_id: "sensor.fridge_temperature", domain: "sensor", name: "Fridge Temperature" },
+      { entity_id: "switch.fridge_plug", domain: "switch", name: "Fridge Plug" },
+    ],
+    foods: [
+      { id: "grocy:12", label: "Tomatoes", metadata: { available_in_mealie: true } },
+      { id: "mocked:peas", label: "Frozen peas", metadata: { available_in_mealie: false } },
+    ],
+    recipes: [{
+      id: "mocked:recipe:sauce",
+      provider: "mocked_recipe",
+      label: "Tomato sauce",
+    }],
     logbook: [],
     readiness: {
       ready: [{ label: "Tomato sauce", detail: "2 cups", reason: "Prepared component exists", status: "ok" }],
@@ -152,7 +225,7 @@ panel.hass = {
       kitchenowl_configured: true,
       grocy_minimum_stock: true,
     },
-    operations: { catalog_providers: ["mocked"], health: { ok: 1 }, attention_total: 0 },
+    operations: { catalog_providers: ["mocked"], dev_mode: true, health: { ok: 1 }, attention_total: 0 },
     storage_attention: {
       status: "warning",
       status_label: "Storage attention needed",
@@ -208,6 +281,71 @@ assert.match(panel.shadowRoot.innerHTML, /Prepared components vs Grocy stock/);
 assert.match(panel.shadowRoot.innerHTML, /Tomatoes/);
 assert.match(panel.shadowRoot.innerHTML, /Prepared components/);
 assert.match(panel.shadowRoot.innerHTML, /mpa:component:sauce/);
+panel._tab = "info";
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /Catalog mode/);
+assert.match(panel.shadowRoot.innerHTML, /Catalog size/);
+assert.match(panel.shadowRoot.innerHTML, /mocked/);
+assert.match(panel.shadowRoot.innerHTML, /2 foods \/ 1 recipes/);
+assert.match(panel.shadowRoot.innerHTML, /Mealie/);
+assert.match(panel.shadowRoot.innerHTML, /1 foods marked available in Mealie/);
+assert.match(panel.shadowRoot.innerHTML, /Grocy shopping/);
+assert.match(panel.shadowRoot.innerHTML, /KitchenOwl shopping/);
+panel._tab = "storage";
+panel._showLocation = true;
+panel._editingLocation = "fridge";
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /name="temperature"><option value="">None<\/option><option value="sensor.fridge_humidity"/);
+assert.match(panel.shadowRoot.innerHTML, /value="sensor.fridge_temperature" selected/);
+assert.match(panel.shadowRoot.innerHTML, /value="binary_sensor.fridge_door" selected/);
+assert.match(panel.shadowRoot.innerHTML, /value="switch.fridge_plug" selected/);
+assert.match(panel.shadowRoot.innerHTML, /class="card location-card type-fridge selected"/);
+assert.match(panel.shadowRoot.innerHTML, /class="card location-card type-freezer"/);
+assert.match(panel.shadowRoot.innerHTML, /class="row container-card kind-meal"/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /class="row container-card kind-ingredient"/);
+assert.match(panel.shadowRoot.innerHTML, /ha-icon icon="mdi:fridge-outline"/);
+assert.match(panel.shadowRoot.innerHTML, /ha-icon icon="mdi:snowflake"/);
+assert.match(panel.shadowRoot.innerHTML, /title="View containers" aria-label="View containers"/);
+assert.match(panel.shadowRoot.innerHTML, /title="Edit location" aria-label="Edit location"/);
+assert.match(panel.shadowRoot.innerHTML, /title="Move container" aria-label="Move container"/);
+assert.match(panel.shadowRoot.innerHTML, /<span class="location-type">fridge<\/span>/);
+assert.match(panel.shadowRoot.innerHTML, /<span class="location-chip"><ha-icon icon="mdi:silverware-fork-knife"><\/ha-icon><span>Kitchen<\/span><\/span>/);
+assert.match(panel.shadowRoot.innerHTML, /<h3>Top shelf<\/h3>/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /<h3>Door bin<\/h3>/);
+assert.match(panel.shadowRoot.innerHTML, /Tomato sauce/);
+assert.match(panel.shadowRoot.innerHTML, /Sauce tub/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Frozen peas/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Freezer bin/);
+assert.match(panel.shadowRoot.innerHTML, /Ready meal/);
+assert.match(panel.shadowRoot.innerHTML, /Fridge \/ Top shelf/);
+assert.match(panel.shadowRoot.innerHTML, /demo:sauce/);
+assert.match(panel.shadowRoot.innerHTML, /Low stock/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Empty/);
+assert.match(panel.shadowRoot.innerHTML, /1 item needs attention/);
+assert.match(panel.shadowRoot.innerHTML, /ha-icon icon="mdi:check-circle"/);
+assert.match(panel.shadowRoot.innerHTML, /Storage automation clear/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Storage monitoring not configured/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Catalog: DEV/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Catalog size/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /<h2>Containers<\/h2>/);
+panel._selectedLocation = "freezer";
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /class="card location-card type-freezer selected"/);
+assert.match(panel.shadowRoot.innerHTML, /class="row container-card kind-ingredient"/);
+assert.match(panel.shadowRoot.innerHTML, /<h3>Door bin<\/h3>/);
+assert.match(panel.shadowRoot.innerHTML, /Frozen peas/);
+assert.match(panel.shadowRoot.innerHTML, /Freezer bin/);
+assert.match(panel.shadowRoot.innerHTML, /Freezer \/ Door bin/);
+assert.match(panel.shadowRoot.innerHTML, /Empty/);
+panel._tab = "dev";
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /Simulate CRUD/);
+await panel._simulateCrud();
+assert.deepEqual(serviceCalls.at(-1), {
+  domain: "mise_en_place_assistant",
+  service: "simulate_crud",
+  data: {},
+});
 inventoryUpdated();
 await new Promise((resolve) => setImmediate(resolve));
 assert.equal(overviewRequests, 2, "inventory events refresh the panel immediately");

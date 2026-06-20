@@ -110,7 +110,7 @@ api:
               id(selected_item_label) = item_label;
               id(selected_item_format) = item_format;
               id(selected_item_provider) = item_provider;
-              id(selected_content_kind) = content_kind.empty() ? "ingredient" : content_kind;
+              id(selected_content_kind) = content_kind.empty() ? std::string("ingredient") : std::string(content_kind.c_str());
               id(selected_item_unit) = unit;
               id(selected_location_id) = location_id;
               id(selected_location_label) = location_label;
@@ -152,7 +152,7 @@ api:
             if (!id(ha_response_accepted)) {
               ESP_LOGW("mise_en_place_assistant", "Ignoring stale operation result: tag=%s request=%d active=%d view=%d", tag_id.c_str(), request_id, id(active_request_id), id(current_view));
             } else {
-              id(result_title) = title.empty() ? (success ? "Saved" : "Could not save") : title;
+              id(result_title) = title.empty() ? std::string(success ? "Saved" : "Could not save") : std::string(title.c_str());
               id(error_message) = message;
               id(current_view) = success ? 30 : 31;
             }
@@ -195,6 +195,26 @@ api:
             } else {
               id(selected_theme) = theme;
             }
+
+    - action: set_idle_presence
+      variables:
+        nearby: bool
+      then:
+        - lambda: |-
+            id(idle_presence_known) = true;
+            id(idle_presence_nearby) = nearby;
+            ESP_LOGI("mise_en_place_assistant", "Home Assistant idle presence: nearby=%s", nearby ? "true" : "false");
+        - if:
+            condition:
+              lambda: 'return id(current_view) == 3 && !id(idle_presence_nearby);'
+            then:
+              - lambda: 'id(current_view) = 0;'
+              - script.execute: show_page
+        - if:
+            condition:
+              lambda: 'return id(current_view) == 0 && id(idle_presence_nearby);'
+            then:
+              - script.execute: screensaver_timeout
 
 ota:
   - platform: esphome
@@ -623,7 +643,7 @@ text_sensor:
       switch (id(current_view)) {
         case 0: return {"Idle"};
         case 1: return {"Waiting for Home Assistant"};
-        case 3: return {"Clock screensaver"};
+        case 3: return {"Presence clock"};
         case 10: return {"Choosing item"};
         case 11: return {"Choosing quantity"};
         case 13: return {"Choosing location"};
@@ -686,6 +706,14 @@ globals:
   - id: current_view
     type: int
     initial_value: "0"
+
+  - id: idle_presence_known
+    type: bool
+    initial_value: "false"
+
+  - id: idle_presence_nearby
+    type: bool
+    initial_value: "false"
 
   - id: press_view
     type: int
@@ -943,7 +971,7 @@ script:
       - delay: 45s
       - if:
           condition:
-            lambda: 'return id(current_view) == 0;'
+            lambda: 'return id(current_view) == 0 && (!id(idle_presence_known) || id(idle_presence_nearby));'
           then:
             - lambda: 'id(current_view) = 3;'
             - script.execute: show_page

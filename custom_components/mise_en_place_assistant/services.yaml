@@ -16,6 +16,10 @@ create_location:
             - cellar
             - counter
             - other
+    sublocations:
+      description: Optional shelf, drawer, or bin names inside this storage location.
+      selector:
+        object:
     area_id:
       selector:
         text:
@@ -50,6 +54,10 @@ update_location:
             - cellar
             - counter
             - other
+    sublocations:
+      description: Optional shelf, drawer, or bin names inside this storage location.
+      selector:
+        object:
     area_id:
       selector:
         text:
@@ -78,6 +86,9 @@ move_container:
       required: true
       selector:
         text:
+    sublocation:
+      selector:
+        text:
 
 clear_container:
   description: Empty a live container while preserving its NFC identity and product attribution.
@@ -103,6 +114,9 @@ restore_container:
       selector:
         text:
 
+simulate_crud:
+  description: DEV-mode only exercise of mocked/local location and container CRUD paths.
+
 create_container:
   fields:
     tag_id:
@@ -123,6 +137,9 @@ create_container:
       selector:
         text:
     location_id:
+      selector:
+        text:
+    sublocation:
       selector:
         text:
     item_id:
@@ -173,6 +190,9 @@ update_container:
       selector:
         text:
     location_id:
+      selector:
+        text:
+    sublocation:
       selector:
         text:
     unit:
@@ -229,6 +249,9 @@ create_recipe_container:
       selector:
         text:
     location_id:
+      selector:
+        text:
+    sublocation:
       selector:
         text:
 

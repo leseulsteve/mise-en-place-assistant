@@ -10,6 +10,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this._showCreate ??= false;
     this._showLocation ??= false;
     this._editingLocation ??= "";
+    this._selectedLocation ??= "";
     this._containerContentKind ??= "ingredient";
     this._busyAction ??= "";
     this._planningFilter ??= "all";
@@ -110,7 +111,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     if (tab === "manage") {
       return "storage";
     }
-    return ["dashboard", "inventory", "storage", "planning", "dev"].includes(tab) ? tab : "dashboard";
+    return ["dashboard", "inventory", "storage", "planning", "info", "dev"].includes(tab) ? tab : "dashboard";
   }
 
   _render() {
@@ -135,17 +136,20 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       ["inventory", "Inventory"],
       ["storage", "Storage"],
       ["planning", "Planning"],
+      ["info", "Info"],
       ["dev", "Dev"],
     ];
     const body = this._tab === "dev"
       ? this._devView(data)
-      : this._tab === "planning"
-        ? this._planningView(mealInventory, data, foods, logbook)
-        : this._tab === "storage"
-          ? this._storageView(locations, containers, foods, recipes, areas)
-          : this._tab === "inventory"
-            ? this._inventoryView(items, containers, archivedContainers, locations)
-            : this._dashboardView(summary, mealInventory, items, containers, locations, logbook, data);
+      : this._tab === "info"
+        ? this._infoView(data)
+        : this._tab === "planning"
+          ? this._planningView(mealInventory, data, foods, logbook)
+          : this._tab === "storage"
+            ? this._storageView(locations, containers, foods, recipes, areas)
+            : this._tab === "inventory"
+              ? this._inventoryView(items, containers, archivedContainers, locations)
+              : this._dashboardView(summary, mealInventory, items, containers, locations, logbook, data);
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -162,6 +166,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           gap: 10px;
           margin-bottom: 18px;
         }
+        .ops-strip.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .ops-card {
           border: 1px solid var(--divider-color);
           border-radius: 8px;
@@ -272,6 +277,209 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           padding: 15px;
           box-shadow: var(--ha-card-box-shadow, none);
         }
+        .location-card {
+          --card-accent: var(--location-accent, var(--primary-color));
+          overflow: hidden;
+          padding: 0;
+          background:
+            linear-gradient(135deg, color-mix(in srgb, var(--card-accent) 18%, transparent), transparent 36%),
+            var(--card-background-color);
+        }
+        .location-card.selected {
+          border-color: color-mix(in srgb, var(--card-accent) 58%, var(--divider-color));
+          box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-accent) 34%, transparent);
+        }
+        .location-card-header {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto;
+          gap: 12px;
+          align-items: start;
+          padding: 14px 15px 12px;
+          border-top: 5px solid var(--card-accent);
+          border-bottom: 1px solid color-mix(in srgb, var(--card-accent) 38%, var(--divider-color));
+        }
+        .location-card-title {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          min-width: 0;
+        }
+        .location-card-title ha-icon {
+          color: var(--card-accent);
+          --mdc-icon-size: 22px;
+          flex: 0 0 auto;
+        }
+        .location-card-title h2 { overflow-wrap: anywhere; }
+        .location-card-meta {
+          display: flex;
+          gap: 7px;
+          flex-wrap: wrap;
+          margin-top: 8px;
+        }
+        .location-card-meta .pill { margin-top: 0; }
+        .location-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          border: 1px solid color-mix(in srgb, var(--card-accent) 42%, var(--divider-color));
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--card-accent) 13%, transparent);
+          padding: 4px 8px;
+          color: var(--secondary-text-color);
+          font-size: 12px;
+          font-weight: 700;
+        }
+        .location-chip ha-icon { --mdc-icon-size: 15px; color: var(--card-accent); }
+        .location-card .location-type {
+          color: var(--card-accent);
+          font-weight: 800;
+        }
+        .selected-chip {
+          color: var(--card-accent);
+          font-weight: 800;
+        }
+        .location-card-actions {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+          margin-top: 2px;
+        }
+        .icon-button {
+          width: 34px;
+          min-width: 34px;
+          height: 34px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border-radius: 999px;
+          border: 1px solid color-mix(in srgb, var(--card-accent, var(--primary-color)) 46%, var(--divider-color));
+          background: color-mix(in srgb, var(--card-accent, var(--primary-color)) 16%, transparent);
+          color: var(--card-accent, var(--primary-color));
+          padding: 0;
+        }
+        .icon-button.danger {
+          --card-accent: var(--error-color, #f44336);
+        }
+        .icon-button ha-icon { --mdc-icon-size: 18px; }
+        .location-count {
+          display: grid;
+          justify-items: end;
+          gap: 6px;
+          min-width: 82px;
+        }
+        .location-count strong {
+          color: var(--card-accent);
+          font-size: 24px;
+          line-height: 1;
+        }
+        .location-count span {
+          color: var(--secondary-text-color);
+          font-size: 12px;
+          font-weight: 700;
+        }
+        .location-card-body { padding: 12px 15px 15px; }
+        .location-card.type-fridge { --location-accent: #039be5; }
+        .location-card.type-freezer { --location-accent: #5e97f6; }
+        .location-card.type-pantry { --location-accent: #7cb342; }
+        .location-card.type-dry_storage { --location-accent: #8d6e63; }
+        .location-card.type-cellar { --location-accent: #6d4c41; }
+        .location-card.type-counter { --location-accent: #f9a825; }
+        .location-card.type-other { --location-accent: var(--secondary-text-color); }
+        .container-card {
+          --card-accent: var(--container-accent, var(--primary-color));
+          border: 1px solid color-mix(in srgb, var(--card-accent) 34%, var(--divider-color));
+          border-radius: 8px;
+          background:
+            linear-gradient(90deg, color-mix(in srgb, var(--card-accent) 16%, transparent), transparent 42%),
+            var(--card-background-color);
+          padding: 10px 11px;
+        }
+        .container-card.row { border-top: 1px solid color-mix(in srgb, var(--card-accent) 34%, var(--divider-color)); }
+        .container-card + .container-card { margin-top: 8px; }
+        .container-card .row-side { align-self: stretch; align-content: space-between; }
+        .container-card.kind-ingredient { --container-accent: #2e7d32; }
+        .container-card.kind-recipe { --container-accent: #8e24aa; }
+        .container-card.kind-meal { --container-accent: #ef6c00; }
+        .container-card.kind-empty { --container-accent: var(--secondary-text-color); }
+        .container-titleline {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          min-width: 0;
+        }
+        .container-titleline > ha-icon {
+          color: var(--card-accent);
+          --mdc-icon-size: 22px;
+          flex: 0 0 auto;
+        }
+        .container-name {
+          display: flex;
+          gap: 8px;
+          align-items: baseline;
+          flex-wrap: wrap;
+        }
+        .container-item {
+          color: var(--secondary-text-color);
+          font-size: 13px;
+          font-weight: 600;
+        }
+        .container-meta {
+          display: flex;
+          gap: 7px;
+          flex-wrap: wrap;
+          margin-top: 7px;
+        }
+        .container-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          border: 1px solid color-mix(in srgb, var(--card-accent, var(--primary-color)) 38%, var(--divider-color));
+          border-radius: 999px;
+          background: color-mix(in srgb, var(--card-accent, var(--primary-color)) 12%, transparent);
+          padding: 3px 8px;
+          color: var(--secondary-text-color);
+          font-size: 12px;
+          font-weight: 700;
+        }
+        .container-chip ha-icon { --mdc-icon-size: 15px; }
+        .container-chip.kind-ingredient,
+        .container-chip.kind-recipe,
+        .container-chip.kind-meal,
+        .container-chip.kind-empty { color: var(--card-accent); }
+        .container-chip.place ha-icon { color: var(--primary-color); }
+        .container-actions-line {
+          display: flex;
+          gap: 8px;
+          align-items: center;
+          flex-wrap: wrap;
+          justify-content: flex-end;
+        }
+        .container-actions-line select {
+          width: auto;
+          min-width: 158px;
+          max-width: 230px;
+          padding: 7px 28px 7px 9px;
+        }
+        .attention-chip {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          border: 1px solid rgba(255, 152, 0, 0.38);
+          border-radius: 999px;
+          background: rgba(255, 152, 0, 0.12);
+          color: var(--warning-color, #ff9800);
+          padding: 3px 8px;
+          font-size: 12px;
+          font-weight: 750;
+        }
+        .attention-chip.critical {
+          border-color: rgba(244, 67, 54, 0.38);
+          background: rgba(244, 67, 54, 0.12);
+          color: var(--error-color, #f44336);
+        }
+        .attention-chip ha-icon { --mdc-icon-size: 15px; }
         .form { margin-bottom: 16px; }
         .form-section {
           border-top: 1px solid var(--divider-color);
@@ -385,14 +593,42 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         .qty { font-weight: 750; text-align: right; white-space: nowrap; }
         .container-actions {
           display: grid;
-          grid-template-columns: minmax(110px, 1fr) auto auto;
+          grid-template-columns: minmax(110px, 1fr) 34px 34px;
           gap: 8px;
           align-items: end;
           margin-top: 10px;
         }
         .health { margin-top: 9px; font-weight: 650; }
-        .reading-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top:12px; }
-        .reading { background: var(--secondary-background-color, rgba(128,128,128,.08)); border-radius: 8px; padding: 8px; font-size: 13px; }
+        .monitoring-panel {
+          border: 1px solid color-mix(in srgb, var(--location-accent, var(--divider-color)) 28%, var(--divider-color));
+          border-radius: 8px;
+          background: color-mix(in srgb, var(--location-accent, var(--primary-color)) 7%, transparent);
+          padding: 10px;
+          margin-bottom: 12px;
+        }
+        .monitoring-status {
+          display: inline-flex;
+          align-items: center;
+          gap: 7px;
+          font-weight: 700;
+        }
+        .monitoring-status ha-icon { --mdc-icon-size: 18px; }
+        .reading-grid { display:grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top:10px; }
+        .reading { background: var(--card-background-color); border: 1px solid var(--divider-color); border-radius: 8px; padding: 8px; font-size: 13px; }
+        .location-contents { display: grid; gap: 10px; }
+        .content-group {
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          background: var(--secondary-background-color, rgba(128,128,128,.04));
+          padding: 9px 10px 2px;
+        }
+        .content-group h3 {
+          color: var(--location-accent, var(--secondary-text-color));
+          font-size: 13px;
+          font-weight: 750;
+          margin-bottom: 0;
+        }
+        .content-group .row:first-of-type { border-top: 0; }
         .location {
           display: flex;
           justify-content: space-between;
@@ -431,6 +667,9 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           .readiness-grid { grid-template-columns: 1fr; }
           .compare-grid { grid-template-columns: 1fr; }
           .form-grid, .review-grid, .inline-grid, .debug-grid, .container-actions { grid-template-columns: 1fr; }
+          .location-card-header { grid-template-columns: 1fr; }
+          .location-count { justify-items: start; }
+          .location-card-actions { justify-content: flex-start; }
           .row { grid-template-columns: 1fr; }
           .row-side { justify-items: start; }
           .qty { text-align: left; }
@@ -442,15 +681,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
             <h1>Mise en Place Assistant</h1>
             <p class="muted">${data ? `Updated ${new Date().toLocaleTimeString()}` : "Loading overview..."}</p>
           </div>
-          <div class="actions">
-            <button type="button" id="refresh">Refresh</button>
-          </div>
         </header>
         ${this._error ? `<div class="error">${this._safe(this._error)}</div>` : ""}
         ${this._notice ? `<div class="notice">${this._safe(this._notice)}</div>` : ""}
         <nav class="tabs">${tabs.map(([id, label]) => `<button type="button" class="${this._tab === id ? "active" : "secondary"}" data-tab="${id}">${label}</button>`).join("")}</nav>
         ${this._busyAction ? `<p class="busy">Working: ${this._safe(this._busyAction)}</p>` : ""}
-        ${this._opsStrip(summary, operations, data?.shopping, data?.storage_attention)}
+        ${this._opsStrip(summary, operations, data?.shopping, data?.storage_attention, this._tab)}
         ${body}
       </main>
     `;
@@ -458,7 +694,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _wireEvents() {
-    this.shadowRoot.getElementById("refresh")?.addEventListener("click", () => this._load());
     this.shadowRoot.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => { this._tab = button.dataset.tab; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-open-tab]").forEach((button) => button.addEventListener("click", () => { this._tab = button.dataset.openTab; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-planning-filter]").forEach((button) => button.addEventListener("click", () => { this._planningFilter = button.dataset.planningFilter; this._render(); }));
@@ -471,6 +706,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this.shadowRoot.getElementById("cancel-location")?.addEventListener("click", () => { if (this._isBusy()) return; this._showLocation = false; this._editingLocation = ""; this._render(); });
     this.shadowRoot.getElementById("cancel-create")?.addEventListener("click", () => { if (this._isBusy()) return; this._showCreate = false; this._render(); });
     this.shadowRoot.querySelectorAll("[data-queue-empty-containers]").forEach((button) => button.addEventListener("click", () => this._queueEmptyContainers()));
+    this.shadowRoot.querySelectorAll("[data-select-location]").forEach((button) => button.addEventListener("click", () => { if (this._isBusy()) return; this._selectedLocation = button.dataset.selectLocation; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-edit-location]").forEach((button) => button.addEventListener("click", () => { if (this._isBusy()) return; this._editingLocation = button.dataset.editLocation; this._showLocation = true; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-delete-location]").forEach((button) => button.addEventListener("click", () => this._deleteLocation(button.dataset.deleteLocation, button.dataset.locationName, button.dataset.locationProvider, button.dataset.locationLocal)));
     this.shadowRoot.querySelectorAll("[data-move-tag]").forEach((select) => select.addEventListener("change", () => this._moveContainer(select.dataset.moveTag, select.value)));
@@ -485,6 +721,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-suggested-tab]").forEach((button) => button.addEventListener("click", () => { if (this._isBusy()) return; this._tab = this._normalizeTab(button.dataset.suggestedTab); this._render(); }));
     this.shadowRoot.getElementById("dev-refresh")?.addEventListener("click", () => this._load());
     this.shadowRoot.getElementById("dev-copy-overview")?.addEventListener("click", () => this._copyOverview());
+    this.shadowRoot.getElementById("dev-simulate-crud")?.addEventListener("click", () => this._simulateCrud());
     this.shadowRoot.getElementById("dev-sync-missing-products")?.addEventListener("click", () => this._syncMissingProducts());
     this._applyBusyState();
   }
@@ -570,21 +807,19 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _storageView(locations, containers, foods, recipes, areas) {
     const editableLocations = locations.filter((location) => location.editable !== false);
     const editingLocation = editableLocations.find((location) => location.id === this._editingLocation);
+    const selectedLocation = locations.some((location) => location.id === this._selectedLocation)
+      ? this._selectedLocation
+      : locations[0]?.id || "";
+    this._selectedLocation = selectedLocation;
     return `
       ${this._showLocation ? this._locationForm(areas, editingLocation || null) : ""}
       ${this._showCreate ? this._createForm(editableLocations, foods, recipes) : ""}
-      <section class="sections">
+      <section class="stack">
         <div class="stack">
           <section class="card">
-            <div class="toolbar"><h2>Storage locations</h2><button type="button" id="add-location">Add location</button></div>
+            <div class="toolbar"><h2>Storage locations</h2><div class="actions"><button type="button" id="add-location">Add location</button><button type="button" id="add-container" class="secondary">Add container</button></div></div>
           </section>
-          ${locations.map((location) => this._locationCard(location)).join("") || this._emptyCard("Create storage locations in Grocy, or enable DEV mode for mocked locations.")}
-        </div>
-        <div class="stack">
-          <section class="card">
-            <div class="toolbar"><h2>Containers</h2><button type="button" id="add-container">Add container</button></div>
-            ${containers.map((container) => this._managedContainerRow(container, locations)).join("") || this._empty("No containers.")}
-          </section>
+          ${locations.map((location) => this._locationCard(location, containers, locations, location.id === selectedLocation)).join("") || this._emptyCard("Create storage locations in Grocy, or enable DEV mode for mocked locations.")}
         </div>
       </section>
     `;
@@ -638,6 +873,81 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     `;
   }
 
+  _infoView(data) {
+    const summary = data?.summary || {};
+    const operations = data?.operations || {};
+    const shopping = data?.shopping || {};
+    const foods = data?.foods || [];
+    const recipes = data?.recipes || [];
+    const containers = data?.containers || [];
+    const locations = data?.locations || [];
+    const productAttention = data?.product_attention || [];
+    const mealInventory = data?.meal_inventory?.components || [];
+    const providers = (operations.catalog_providers || []).join(" + ") || "none";
+    const mode = operations.dev_mode ? "DEV" : "Live";
+    const mealieFoodCount = foods.filter((food) => food?.metadata?.available_in_mealie || food?.available_in_mealie).length;
+    const recipeProviderCount = recipes.reduce((counts, recipe) => {
+      const provider = recipe.provider || "unknown";
+      counts[provider] = (counts[provider] || 0) + 1;
+      return counts;
+    }, {});
+    const recipeProviderLines = Object.entries(recipeProviderCount)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([provider, count]) => `<p class="muted subline">${this._safe(provider)}: ${this._safe(count)} recipes</p>`)
+      .join("");
+    return `<section class="stack">
+      <section class="grid">
+        ${this._metric("Catalog mode", mode)}
+        ${this._metric("Foods", summary.foods ?? foods.length)}
+        ${this._metric("Recipes", summary.recipes ?? recipes.length)}
+        ${this._metric("Containers", summary.containers ?? containers.length)}
+        ${this._metric("Locations", locations.length)}
+      </section>
+      <section class="sections">
+        <div class="stack">
+          <section class="card">
+            <h2>Catalog</h2>
+            ${this._summaryRow("Providers", [providers])}
+            ${this._summaryRow("Catalog size", [`${summary.foods ?? foods.length} foods / ${summary.recipes ?? recipes.length} recipes`])}
+            ${this._summaryRow("Product review", [`${productAttention.length} products need review`])}
+          </section>
+          <section class="card">
+            <h2>Mealie</h2>
+            ${this._summaryRow("Recipe catalog", [`${recipes.length} recipes loaded`])}
+            ${this._summaryRow("Food metadata", [`${mealieFoodCount} foods marked available in Mealie`])}
+            ${recipeProviderLines || this._empty("No recipe provider stats.")}
+          </section>
+        </div>
+        <div class="stack">
+          <section class="card">
+            <h2>Grocy</h2>
+            ${this._integrationStatusRow("Grocy shopping", shopping.grocy_configured, shopping.product_backed_target === "grocy" || shopping.free_text_target === "grocy")}
+            ${this._summaryRow("Minimum stock", [shopping.grocy_minimum_stock ? "Available for shopping sync" : "Not available"])}
+            ${this._summaryRow("Grocy stock items", [`${(data?.items || []).filter((item) => item.source === "grocy").length} products`])}
+          </section>
+          <section class="card">
+            <h2>KitchenOwl</h2>
+            ${this._integrationStatusRow("KitchenOwl shopping", shopping.kitchenowl_configured, shopping.product_backed_target === "kitchenowl" || shopping.free_text_target === "kitchenowl")}
+            ${this._summaryRow("Shopping target", [`Products: ${this._shoppingTargetLabel(shopping.product_backed_target)} / Text: ${this._shoppingTargetLabel(shopping.free_text_target)}`])}
+            ${this._summaryRow("Prepared inventory", [`${mealInventory.length} meal components tracked`])}
+          </section>
+        </div>
+      </section>
+    </section>`;
+  }
+
+  _integrationStatusRow(label, configured, activeTarget) {
+    const status = configured ? "connected" : "not configured";
+    const target = activeTarget ? "active target" : "not targeted";
+    const icon = configured ? "mdi:check-circle" : "mdi:alert-circle-outline";
+    const klass = configured ? "ok" : "warn";
+    return `<div class="row"><div><p class="name"><ha-icon icon="${icon}"></ha-icon> ${this._safe(label)}</p><p class="muted subline">${this._safe(status)} &middot; ${this._safe(target)}</p></div><div class="qty ${klass}">${configured ? "OK" : "Setup"}</div></div>`;
+  }
+
+  _shoppingTargetLabel(provider) {
+    return provider === "kitchenowl" ? "KitchenOwl" : provider === "grocy" ? "Grocy" : "Automatic";
+  }
+
   _devView(data) {
     const summary = data?.summary || {};
     const shopping = data?.shopping || {};
@@ -649,6 +959,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           <h2>Dev controls</h2>
           <button type="button" class="secondary" id="dev-refresh">Refresh overview</button>
           <button type="button" class="secondary" id="dev-copy-overview">Copy overview JSON</button>
+          ${data?.operations?.dev_mode ? `<button type="button" class="secondary" id="dev-simulate-crud">Simulate CRUD</button>` : ""}
           ${shopping.grocy_minimum_stock ? `<button type="button" class="secondary" id="dev-sync-missing-products">Queue Grocy minimum stock</button>` : ""}
         </div>
       </section>
@@ -689,7 +1000,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     return `<article class="card"><p class="muted">${this._safe(label)}</p><p class="metric ${klass}">${this._safe(value)}</p></article>`;
   }
 
-  _opsStrip(summary, operations, shopping = {}, storageAttention = {}) {
+  _opsStrip(summary, operations, shopping = {}, storageAttention = {}, activeTab = "") {
     const providers = (operations.catalog_providers || []).join(" + ") || "none";
     const health = operations.health || {};
     const badHealth = storageAttention.attention_count ?? ((health.warning || 0) + (health.critical || 0));
@@ -698,9 +1009,11 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const productTarget = shopping.product_backed_target || "grocy";
     const textTarget = shopping.free_text_target || "grocy";
     const minimumStock = shopping.grocy_minimum_stock ? "minimum stock available" : "minimum stock unavailable";
-    return `<section class="ops-strip">
+    const catalogCards = activeTab === "storage" ? "" : `
       <div class="ops-card"><strong>Catalog: ${this._safe(mode)}</strong><span>${this._safe(providers)}</span></div>
-      <div class="ops-card"><strong>Catalog size</strong><span>${this._safe(summary.foods ?? 0)} foods / ${this._safe(summary.recipes ?? 0)} recipes</span></div>
+      <div class="ops-card"><strong>Catalog size</strong><span>${this._safe(summary.foods ?? 0)} foods / ${this._safe(summary.recipes ?? 0)} recipes</span></div>`;
+    return `<section class="ops-strip${activeTab === "storage" ? " compact" : ""}">
+      ${catalogCards}
       <div class="ops-card"><strong class="${badHealth ? "warn" : "ok"}">Storage alerts: ${this._safe(badHealth)}</strong><span>${this._safe(storageAttention.unhealthy_locations_count ?? 0)} unhealthy locations</span></div>
       <div class="ops-card"><strong>Shopping: ${this._safe(shoppingProvider)}</strong><span>Products: ${this._safe(productTarget)} · Text: ${this._safe(textTarget)} · ${this._safe(minimumStock)}</span></div>
     </section>`;
@@ -736,6 +1049,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
 
   _createForm(locations, foods, recipes) {
     const locationOptions = locations.map((location) => `<option value="${this._safe(location.id)}">${this._safe(location.name)}</option>`).join("");
+    const sublocationOptions = locations.flatMap((location) => (location.sublocations || []).map((sublocation) => `<option value="${this._safe(sublocation)}">${this._safe(location.name)} / ${this._safe(sublocation)}</option>`)).join("");
     const foodOptions = foods.map((food) => `<option value="${this._safe(food.id)}">${this._safe(food.label)}</option>`).join("");
     const recipeOptions = recipes.map((recipe) => `<option value="${this._safe(recipe.id)}">${this._safe(recipe.label)}</option>`).join("");
     const selected = (value) => this._containerContentKind === value ? " selected" : "";
@@ -753,6 +1067,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           ${contentField}
           <label>Quantity<input name="quantity" required type="number" min="0" step="any" value="1" /></label>
           <label>Location<select name="location_id"><option value="">Choose a location</option>${locationOptions}</select></label>
+          <label>Sublocation<input name="sublocation" list="sublocation-options" placeholder="Top shelf, drawer..." /></label>
+          <datalist id="sublocation-options">${sublocationOptions}</datalist>
           ${this._containerContentKind === "ingredient" ? `<label>Best before<input name="best_before_date" type="date" /></label><label>Purchased<input name="purchased_date" type="date" /></label><label>Opened<input name="opened_date" type="date" /></label>` : ""}
         </div>
         <div class="actions"><button type="button" class="secondary" id="cancel-create">Cancel</button><button type="submit">Save container</button></div>
@@ -788,6 +1104,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     }
     if (value("name")) data.name = value("name");
     if (value("location_id")) data.location_id = value("location_id");
+    if (value("sublocation")) data.sublocation = value("sublocation");
     if (contentKind === "ingredient" && value("best_before_date")) data.best_before_date = value("best_before_date");
     if (contentKind === "ingredient" && value("purchased_date")) data.purchased_date = value("purchased_date");
     if (contentKind === "ingredient" && value("opened_date")) data.opened_date = value("opened_date");
@@ -805,6 +1122,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _locationForm(areas, location = null) {
     const sensors = location?.sensors || {};
     const monitoring = location?.monitoring || {};
+    const sublocations = (location?.sublocations || []).join(", ");
     const selected = (current, value) => current === value ? " selected" : "";
     const areaOptions = areas.map((area) => `<option value="${this._safe(area.id)}"${selected(location?.area_id, area.id)}>${this._safe(area.name)}</option>`).join("");
     const typeOptions = ["fridge", "freezer", "pantry", "dry_storage", "cellar", "counter", "other"]
@@ -817,13 +1135,14 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <label>Storage location<input name="name" required ${isEditing ? "readonly " : ""}value="${this._safe(location?.name || "")}" /></label>
         <label>Home Assistant area<select name="area_id"><option value="">No area</option>${areaOptions}</select></label>
         <label>Type<select name="location_type">${typeOptions}</select></label>
+        <label>Sublocations<input name="sublocations" placeholder="Top shelf, bottom drawer" value="${this._safe(sublocations)}" /></label>
       </div></div>
       <div class="form-section"><h3>Monitoring sensors</h3><div class="form-grid">
-        <label>Temperature sensor<input name="temperature" placeholder="sensor.freezer_temperature" value="${this._safe(sensors.temperature || "")}" /></label>
-        <label>Humidity sensor<input name="humidity" placeholder="sensor.freezer_humidity" value="${this._safe(sensors.humidity || "")}" /></label>
-        <label>Door sensor<input name="door" placeholder="binary_sensor.freezer_door" value="${this._safe(sensors.door || "")}" /></label>
-        <label>Power sensor<input name="power" placeholder="sensor.freezer_power" value="${this._safe(sensors.power || "")}" /></label>
-        <label>Appliance plug<input name="power_switch" placeholder="switch.freezer_plug" value="${this._safe(sensors.power_switch || "")}" /></label>
+        <label>Temperature sensor${this._entitySelect("temperature", sensors.temperature, ["sensor"])}</label>
+        <label>Humidity sensor${this._entitySelect("humidity", sensors.humidity, ["sensor"])}</label>
+        <label>Door sensor${this._entitySelect("door", sensors.door, ["binary_sensor"])}</label>
+        <label>Power sensor${this._entitySelect("power", sensors.power, ["sensor"])}</label>
+        <label>Appliance plug${this._entitySelect("power_switch", sensors.power_switch, ["switch"])}</label>
       </div></div>
       <div class="form-section"><h3>Thresholds</h3><div class="form-grid">
         <label>Minimum temperature<input name="temperature_min" type="number" step="any" value="${this._safe(monitoring.temperature_min ?? "")}" /></label>
@@ -839,13 +1158,14 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const value = (name) => form.elements[name].value.trim();
     const sensors = Object.fromEntries(["temperature", "humidity", "door", "power", "power_switch"].filter((name) => value(name)).map((name) => [name, value(name)]));
     const monitoring = Object.fromEntries(["temperature_min", "temperature_max"].filter((name) => value(name) !== "").map((name) => [name, Number(value(name))]));
+    const sublocations = value("sublocations").split(",").map((name) => name.trim()).filter(Boolean);
     if (value("power_switch")) monitoring.power_required = true;
     const locationId = value("location_id");
     await this._withBusy("saving location", async () => {
       await this._hass.callService(
         "mise_en_place_assistant",
         locationId ? "update_location" : "create_location",
-        { ...(locationId ? { location_id: locationId } : {}), name: value("name"), location_type: value("location_type"), ...(value("area_id") ? { area_id: value("area_id") } : {}), sensors, monitoring },
+        { ...(locationId ? { location_id: locationId } : {}), name: value("name"), location_type: value("location_type"), sublocations, ...(value("area_id") ? { area_id: value("area_id") } : {}), sensors, monitoring },
       );
       this._showLocation = false;
       this._editingLocation = "";
@@ -865,10 +1185,11 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     }, (err) => { this._error = err?.message || "Could not delete location."; this._render(); });
   }
 
-  async _moveContainer(tagId, locationId) {
-    if (!locationId || this._isBusy()) return;
+  async _moveContainer(tagId, selection) {
+    if (!selection || this._isBusy()) return;
+    const [locationId, sublocation = ""] = selection.split("||");
     await this._withBusy("moving container", async () => {
-      await this._hass.callService("mise_en_place_assistant", "move_container", { tag_id: tagId, location_id: locationId });
+      await this._hass.callService("mise_en_place_assistant", "move_container", { tag_id: tagId, location_id: locationId, ...(sublocation ? { sublocation } : {}) });
       this._notice = "Container moved.";
       await this._loadIfNoEventSocket();
     }, (err) => { this._error = err?.message || "Could not move container."; this._render(); });
@@ -916,6 +1237,18 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       await this._loadIfNoEventSocket();
     }, (err) => {
       this._error = err?.message || "Could not sync Grocy minimum-stock shopping.";
+      this._render();
+    });
+  }
+
+  async _simulateCrud() {
+    if (this._isBusy()) return;
+    await this._withBusy("simulating CRUD", async () => {
+      await this._hass.callService("mise_en_place_assistant", "simulate_crud", {});
+      this._notice = "DEV CRUD simulation completed.";
+      await this._loadIfNoEventSocket();
+    }, (err) => {
+      this._error = err?.message || "Could not simulate DEV CRUD.";
       this._render();
     });
   }
@@ -1130,7 +1463,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _storageStatusLabel(status, attentionCount = 0) {
     if (status === "critical") return "Storage attention critical";
     if (attentionCount) return "Storage attention needed";
-    if (status === "not_configured") return "Storage monitoring not configured";
     if (status === "unavailable") return "Storage monitoring unavailable";
     if (status === "unknown") return "Storage monitoring unavailable";
     return "Storage automation clear";
@@ -1179,16 +1511,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       ...(recipe.categories || []).map((category) => category),
     ].join(" · ");
     const identity = [recipe.provider, recipe.id].filter(Boolean).join(" · ");
-    return `<div class="row">
-      <div>
-        <p class="name">${this._safe(container.item_label)}</p>
-        <p class="muted subline">${this._safe(container.content_kind)} &middot; ${this._safe(container.location)}</p>
-        ${meta ? `<p class="muted subline">${this._safe(meta)}</p>` : ""}
-        ${taxonomy ? `<p class="muted subline">${this._safe(taxonomy)}</p>` : ""}
-        ${identity ? `<span class="pill">${this._safe(identity)}</span>` : ""}
-      </div>
-      <div class="qty">${this._safe(container.quantity)}<br><span class="muted">${this._safe(container.unit)}</span></div>
-    </div>`;
+    return this._containerRow(container, "", [meta, taxonomy], identity ? [identity] : []);
   }
 
   _planningComparisonRow(entry) {
@@ -1229,9 +1552,68 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     return this._summaryRow(item.label, [`${quantity} · ${(item.reasons || []).join(", ")}`], { quantity: "Review", klass: "warn" });
   }
 
-  _containerRow(item, klass = "") {
-    const details = [item.content_kind, item.item_label, item.location].filter(Boolean).join(" · ");
-    return this._summaryRow(item.name, [details, item.format], { quantity: item.quantity, unit: item.unit, klass, pills: [item.tag_id || "no tag"] });
+  _containerRow(item, klass = "", extraDetails = [], extraPills = [], action = "") {
+    const title = item.name || item.item_label || "Container";
+    const kind = item.content_kind || "empty";
+    const itemLabel = item.item_label && item.item_label !== title ? `<span class="container-item">${this._safe(item.item_label)}</span>` : "";
+    const details = [item.format, ...extraDetails].filter(Boolean).map((line) => `<p class="muted subline">${this._safe(line)}</p>`).join("");
+    const pills = [item.tag_id || "no tag", ...extraPills].filter(Boolean).map((pill) => `<span class="pill">${this._safe(pill)}</span>`).join("");
+    const attention = this._containerAttention(item).join("");
+    return `<div class="row container-card kind-${this._safe(this._cssToken(kind))}">
+      <div>
+        <div class="container-titleline">
+          <ha-icon icon="${this._contentKindIcon(kind)}"></ha-icon>
+          <p class="name container-name"><span>${this._safe(title)}</span>${itemLabel}</p>
+        </div>
+        <div class="container-meta">
+          ${this._contentKindChip(kind)}
+          ${this._placeChip(item)}
+          ${attention}
+        </div>
+        ${details}
+        ${pills}
+      </div>
+      <div class="row-side"><div class="qty ${this._safe(klass)}">${this._safe(item.quantity)}${item.unit ? `<br><span class="muted">${this._safe(item.unit)}</span>` : ""}</div>${action ? `<div class="container-actions-line">${action}</div>` : ""}</div>
+    </div>`;
+  }
+
+  _placeLabel(item) {
+    return [item.location, item.sublocation].filter(Boolean).join(" / ");
+  }
+
+  _contentKindChip(contentKind) {
+    const kind = contentKind || "empty";
+    const labels = { ingredient: "Ingredient", recipe: "Recipe batch", meal: "Ready meal", empty: "Empty" };
+    return `<span class="container-chip kind-${this._safe(this._cssToken(kind))}"><ha-icon icon="${this._contentKindIcon(kind)}"></ha-icon>${this._safe(labels[kind] || kind.replaceAll("_", " "))}</span>`;
+  }
+
+  _contentKindIcon(contentKind) {
+    return {
+      ingredient: "mdi:food-apple-outline",
+      recipe: "mdi:chef-hat",
+      meal: "mdi:silverware-fork-knife",
+      empty: "mdi:package-variant",
+    }[contentKind] || "mdi:package-variant";
+  }
+
+  _placeChip(item) {
+    const place = this._placeLabel(item);
+    return place ? `<span class="container-chip place"><ha-icon icon="mdi:map-marker-outline"></ha-icon>${this._safe(place)}</span>` : "";
+  }
+
+  _containerAttention(item) {
+    const warnings = [];
+    const quantity = this._quantityNumber(item);
+    if (quantity === 0) {
+      warnings.push(`<span class="attention-chip critical"><ha-icon icon="mdi:package-variant-closed-remove"></ha-icon>Empty</span>`);
+    } else if (quantity <= 2) {
+      warnings.push(`<span class="attention-chip"><ha-icon icon="mdi:alert"></ha-icon>Low stock</span>`);
+    }
+    const today = new Date().toISOString().slice(0, 10);
+    if (item.best_before_date && String(item.best_before_date) < today) {
+      warnings.push(`<span class="attention-chip critical"><ha-icon icon="mdi:calendar-alert"></ha-icon>Past best before</span>`);
+    }
+    return warnings;
   }
 
   _inventoryContainerRow(container, locations) {
@@ -1243,12 +1625,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         ${dateLine ? `<p class="muted subline">${dateLine}</p>` : ""}
         <form class="container-actions" data-adjust-container="${this._safe(container.tag_id)}">
           <label>Quantity<input name="quantity" required type="number" min="0.000001" step="any" /></label>
-          <button type="submit" class="secondary" name="action" value="fill">Add quantity</button>
-          <button type="submit" class="secondary" name="action" value="remove">Remove quantity</button>
+          <button type="submit" class="icon-button" name="action" value="fill" title="Add quantity" aria-label="Add quantity"><ha-icon icon="mdi:plus"></ha-icon></button>
+          <button type="submit" class="icon-button" name="action" value="remove" title="Remove quantity" aria-label="Remove quantity"><ha-icon icon="mdi:minus"></ha-icon></button>
         </form>
-        <div class="actions">
-          <button type="button" class="secondary" data-clear-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}">Clear container</button>
-          ${empty ? `<button type="button" class="secondary" data-archive-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}">Archive container</button>` : ""}
+        <div class="container-actions-line">
+          <button type="button" class="icon-button danger" data-clear-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}" title="Clear container" aria-label="Clear container"><ha-icon icon="mdi:delete-sweep-outline"></ha-icon></button>
+          ${empty ? `<button type="button" class="icon-button danger" data-archive-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}" title="Archive container" aria-label="Archive container"><ha-icon icon="mdi:archive-arrow-down-outline"></ha-icon></button>` : ""}
           ${this._moveSelect(container, locations)}
         </div>
       </div>
@@ -1261,22 +1643,21 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       [`${container.item_label || "Container"} · archived ${this._formatTime(container.archived_at)}`],
       {
         pills: [container.tag_id || "no tag"],
-        action: `<button type="button" class="secondary" data-restore-container="${this._safe(container.tag_id)}">Restore container</button>`,
+        action: `<button type="button" class="icon-button" data-restore-container="${this._safe(container.tag_id)}" title="Restore container" aria-label="Restore container"><ha-icon icon="mdi:archive-arrow-up-outline"></ha-icon></button>`,
       },
     );
   }
 
   _managedContainerRow(container, locations) {
-    return this._summaryRow(
-      container.name,
-      [container.item_label, container.location],
-      { quantity: container.quantity, unit: container.unit, action: this._moveSelect(container, locations) },
-    );
+    return this._containerRow(container, "", [], [], this._moveSelect(container, locations));
   }
 
   _moveSelect(container, locations) {
-    const choices = locations.filter((location) => location.editable !== false).map((location) => `<option value="${this._safe(location.id)}">${this._safe(location.name)}</option>`).join("");
-    return `<select data-move-tag="${this._safe(container.tag_id)}"><option value="">Move container to...</option>${choices}</select>`;
+    const choices = locations.filter((location) => location.editable !== false).flatMap((location) => {
+      const base = [`<option value="${this._safe(location.id)}||">${this._safe(location.name)}</option>`];
+      return base.concat((location.sublocations || []).map((sublocation) => `<option value="${this._safe(location.id)}||${this._safe(sublocation)}">${this._safe(location.name)} / ${this._safe(sublocation)}</option>`));
+    }).join("");
+    return `<select data-move-tag="${this._safe(container.tag_id)}" title="Move container" aria-label="Move container"><option value="">Move...</option>${choices}</select>`;
   }
 
   _productAttentionRow(item) {
@@ -1375,13 +1756,117 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     </div>`;
   }
 
-  _locationCard(location) {
+  _locationCard(location, containers = [], locations = [], selected = false) {
     const health = location.health || {};
     const readings = Object.entries(health.readings || {}).map(([role, reading]) => `<div class="reading"><strong>${this._safe(role.replaceAll("_", " "))}</strong><br>${this._safe(reading.state)}${reading.unit ? ` ${this._safe(reading.unit)}` : ""}</div>`).join("");
-    const statusLabel = this._storageStatusLabel(health.status || "unknown", ["warning", "critical"].includes(health.status) ? 1 : 0);
-    const problems = health.problems?.length ? health.problems.join(" · ") : statusLabel;
-    const deleteLabel = location.provider === "mocked" && location.local ? "Remove" : "Clear metadata";
-    return `<article class="card"><div class="toolbar"><div><h2>${this._safe(location.name)}</h2><p class="muted subline">${this._safe(location.location_type?.replaceAll("_", " ") || "location")}${location.area_name ? ` &middot; ${this._safe(location.area_name)}` : ""}</p></div>${location.editable !== false ? `<div class="actions"><button class="secondary" data-edit-location="${this._safe(location.id)}">Edit</button><button class="secondary" data-delete-location="${this._safe(location.id)}" data-location-name="${this._safe(location.name)}" data-location-provider="${this._safe(location.provider || "")}" data-location-local="${location.local ? "true" : "false"}">${deleteLabel}</button></div>` : ""}</div><p class="metric">${this._safe(location.containers)} <span class="muted">containers</span></p><p class="health ${this._safe(health.status || "")}">${this._safe(statusLabel)}</p><p class="muted subline">${this._safe(problems)}</p>${readings ? `<div class="reading-grid">${readings}</div>` : ""}</article>`;
+    const sublocations = (location.sublocations || []).map((sublocation) => `<span class="pill">${this._safe(sublocation)}</span>`).join("");
+    const contents = selected ? this._locationContents(location, containers, locations) : "";
+    const monitoring = selected ? this._locationMonitoring(health, readings) : "";
+    const problems = selected && health.problems?.length ? `<p class="muted subline">${this._safe(health.problems.join(" · "))}</p>` : "";
+    const removeButton = location.provider === "mocked" && location.local
+      ? `<button class="icon-button danger" data-delete-location="${this._safe(location.id)}" data-location-name="${this._safe(location.name)}" data-location-provider="${this._safe(location.provider || "")}" data-location-local="true" title="Remove location" aria-label="Remove location"><ha-icon icon="mdi:trash-can-outline"></ha-icon></button>`
+      : "";
+    const locationType = location.location_type || "other";
+    const contentAttention = this._locationContentAttention(location, containers);
+    const selectButton = selected ? "" : `<button class="icon-button" data-select-location="${this._safe(location.id)}" title="View containers" aria-label="View containers"><ha-icon icon="mdi:format-list-bulleted"></ha-icon></button>`;
+    const selectedChip = selected ? `<span class="location-chip selected-chip"><ha-icon icon="mdi:check-circle"></ha-icon><span>Selected</span></span>` : "";
+    const actions = location.editable !== false ? `<div class="location-card-actions">${selectButton}<button class="icon-button" data-edit-location="${this._safe(location.id)}" title="Edit location" aria-label="Edit location"><ha-icon icon="mdi:pencil-outline"></ha-icon></button>${removeButton}</div>` : `<div class="location-card-actions">${selectButton}</div>`;
+    return `<article class="card location-card type-${this._safe(this._cssToken(locationType))}${selected ? " selected" : ""}">
+      <div class="location-card-header">
+        <div>
+          <div class="location-card-title">
+            <ha-icon icon="${this._locationTypeIcon(locationType)}"></ha-icon>
+            <h2>${this._safe(location.name)}</h2>
+          </div>
+          <div class="location-card-meta">
+            <span class="location-chip"><span class="location-type">${this._safe(locationType.replaceAll("_", " "))}</span></span>
+            ${this._locationArea(location)}
+            ${contentAttention}
+            ${selectedChip}
+            ${sublocations}
+          </div>
+        </div>
+        <div class="location-count"><strong>${this._safe(location.containers)}</strong><span>containers</span>${actions}</div>
+      </div>
+      <div class="location-card-body">
+        ${monitoring}
+        ${problems}
+        ${contents}
+      </div>
+    </article>`;
+  }
+
+  _locationArea(location) {
+    if (!location.area_name) {
+      return "";
+    }
+    const icon = location.area_icon || "mdi:floor-plan";
+    return `<span class="location-chip"><ha-icon icon="${this._safe(icon)}"></ha-icon><span>${this._safe(location.area_name)}</span></span>`;
+  }
+
+  _locationTypeIcon(locationType) {
+    return {
+      fridge: "mdi:fridge-outline",
+      freezer: "mdi:snowflake",
+      pantry: "mdi:food-variant",
+      dry_storage: "mdi:archive-outline",
+      cellar: "mdi:home-floor-b",
+      counter: "mdi:countertop-outline",
+    }[locationType] || "mdi:map-marker-outline";
+  }
+
+  _locationContentAttention(location, containers) {
+    const count = containers.filter((container) => (
+      container.location_id === location.id && this._containerAttention(container).length
+    )).length;
+    if (!count) {
+      return "";
+    }
+    const label = count === 1 ? "1 item needs attention" : `${count} items need attention`;
+    return `<span class="attention-chip"><ha-icon icon="mdi:alert"></ha-icon>${this._safe(label)}</span>`;
+  }
+
+  _locationMonitoring(health, readings) {
+    if (health.status === "not_configured" || !readings) {
+      return "";
+    }
+    const status = health.status || "unknown";
+    const icon = status === "critical" ? "mdi:alert-circle" : status === "warning" ? "mdi:alert" : status === "ok" ? "mdi:check-circle" : "mdi:help-circle";
+    const attentionCount = ["warning", "critical"].includes(status) ? 1 : 0;
+    const label = this._storageStatusLabel(status, attentionCount);
+    return `<section class="monitoring-panel"><div class="monitoring-status ${this._safe(status)}"><ha-icon icon="${icon}"></ha-icon><span>${this._safe(label)}</span></div><div class="reading-grid">${readings}</div></section>`;
+  }
+
+  _locationContents(location, containers, locations = []) {
+    const matching = containers
+      .filter((container) => container.location_id === location.id)
+      .sort((a, b) => [
+        (a.sublocation || "").localeCompare(b.sublocation || ""),
+        (a.item_label || a.name || "").localeCompare(b.item_label || b.name || ""),
+        (a.name || "").localeCompare(b.name || ""),
+      ].find((result) => result !== 0) || 0);
+    if (!matching.length) {
+      return `<div class="location-contents">${this._empty("No containers in this location.")}</div>`;
+    }
+    const groups = new Map();
+    for (const container of matching) {
+      const sublocation = container.sublocation || "Main";
+      if (!groups.has(sublocation)) {
+        groups.set(sublocation, []);
+      }
+      groups.get(sublocation).push(container);
+    }
+    const sections = Array.from(groups.entries()).map(([sublocation, items]) => `
+      <section class="content-group">
+        <h3>${this._safe(sublocation)}</h3>
+        ${items.map((item) => this._locationContentRow(item, locations)).join("")}
+      </section>
+    `).join("");
+    return `<div class="location-contents">${sections}</div>`;
+  }
+
+  _locationContentRow(container, locations = []) {
+    return locations.length ? this._managedContainerRow(container, locations) : this._containerRow(container);
   }
 
   _locationRow(location) {
@@ -1393,7 +1878,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _itemRow(item) {
     const places = Object.keys(item.locations || {}).join(" · ");
     const amount = item.quantity ?? Object.entries(item.quantities || {}).map(([unit, quantity]) => `${quantity} ${unit}`).join(" + ");
-    const containers = (item.physical_containers || []).map((container) => `${container.name}: ${container.quantity} ${container.unit} @ ${container.location}`).join(" · ");
+    const containers = (item.physical_containers || []).map((container) => `${container.name}: ${container.quantity} ${container.unit} @ ${this._placeLabel(container)}`).join(" · ");
     const freshness = (item.freshness_dates || []).map((entry) => {
       const dates = [
         entry.best_before_date ? `best before ${entry.best_before_date}` : "",
@@ -1445,6 +1930,21 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
 
   _options(options, current) {
     return options.map(([value, label]) => `<option value="${this._safe(value)}"${value === current ? " selected" : ""}>${this._safe(label)}</option>`).join("");
+  }
+
+  _entitySelect(name, current, domains) {
+    const currentValue = current || "";
+    const entities = (this._data?.entities || []).filter((entity) => domains.includes(entity.domain));
+    const seen = new Set();
+    const options = entities.map((entity) => {
+      seen.add(entity.entity_id);
+      const label = entity.name && entity.name !== entity.entity_id ? `${entity.name} (${entity.entity_id})` : entity.entity_id;
+      return `<option value="${this._safe(entity.entity_id)}"${entity.entity_id === currentValue ? " selected" : ""}>${this._safe(label)}</option>`;
+    });
+    if (currentValue && !seen.has(currentValue)) {
+      options.unshift(`<option value="${this._safe(currentValue)}" selected>${this._safe(currentValue)} (currently saved)</option>`);
+    }
+    return `<select name="${this._safe(name)}"><option value="">None</option>${options.join("")}</select>`;
   }
 
   _empty(message) {
@@ -1501,6 +2001,10 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const div = document.createElement("div");
     div.textContent = value ?? "";
     return div.innerHTML;
+  }
+
+  _cssToken(value) {
+    return String(value || "other").toLowerCase().replace(/[^a-z0-9_-]/g, "_") || "other";
   }
 }
 

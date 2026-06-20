@@ -98,6 +98,16 @@ class TestM5DialEventContract(unittest.TestCase):
         self.assertIn("id(press_view) == 21 && !id(last_tag_id).empty() && !id(selected_location_id).empty()", M5DIAL_SOURCE)
         self.assertIn("Cannot update container with incomplete selection", M5DIAL_SOURCE)
 
+    def test_idle_clock_is_gated_by_home_assistant_presence(self) -> None:
+        self.assertIn("CONF_M5DIAL_PRESENCE_ENTITY_IDS", INIT_SOURCE)
+        self.assertIn("async_track_state_change_event", INIT_SOURCE)
+        self.assertIn("set_idle_presence", M5DIAL_SOURCE)
+        self.assertIn("idle_presence_known", M5DIAL_SOURCE)
+        self.assertIn("idle_presence_nearby", M5DIAL_SOURCE)
+        self.assertIn("id(current_view) == 0 && (!id(idle_presence_known) || id(idle_presence_nearby))", M5DIAL_SOURCE)
+        self.assertIn("id(current_view) == 3 && !id(idle_presence_nearby)", M5DIAL_SOURCE)
+        self.assertIn('case 3: return {"Presence clock"};', M5DIAL_SOURCE)
+
     def test_service_schemas_match_mutating_store_method_inputs(self) -> None:
         for service_name, required in {
             "SERVICE_CREATE_CONTAINER": ("ATTR_TAG_ID", "ATTR_ITEM_ID"),

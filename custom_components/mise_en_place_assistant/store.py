@@ -64,10 +64,53 @@ _LOGGER = logging.getLogger(__name__)
 # UUID5 makes the one-time migration deterministic while UUID4 identifies new
 # locally-created products that have no source identifier.
 _PRODUCT_NAMESPACE = UUID("fe222126-260f-48dc-a4ae-9817f251e867")
+PROTEIN_GROUP_ALIASES = {
+    "bean": "vegetarian",
+    "beans": "vegetarian",
+    "beef": "red meat",
+    "chicken": "poultry",
+    "cod": "fish",
+    "duck": "poultry",
+    "fish": "fish",
+    "lamb": "red meat",
+    "lentil": "vegetarian",
+    "lentils": "vegetarian",
+    "pork": "red meat",
+    "poultry": "poultry",
+    "red meat": "red meat",
+    "red-meat": "red meat",
+    "red_meat": "red meat",
+    "salmon": "fish",
+    "seafood": "fish",
+    "tempeh": "vegetarian",
+    "tofu": "vegetarian",
+    "tuna": "fish",
+    "turkey": "poultry",
+    "vegan": "vegetarian",
+    "veal": "red meat",
+    "vegetarian": "vegetarian",
+    "venison": "red meat",
+}
 
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _normalize_sublocations(value: Any) -> list[str]:
+    """Return unique shelf/drawer names for a storage location."""
+    if value in (None, ""):
+        return []
+    raw_values = value if isinstance(value, list) else [value]
+    sublocations: list[str] = []
+    seen: set[str] = set()
+    for raw_value in raw_values:
+        name = str(raw_value or "").strip()
+        key = name.casefold()
+        if name and key not in seen:
+            seen.add(key)
+            sublocations.append(name)
+    return sublocations
 
 
 class MiseEnPlaceAssistantInventory:
@@ -306,6 +349,7 @@ class MiseEnPlaceAssistantInventory:
                     **annotation,
                     **location,
                     "location_type": annotation.get("location_type", "other"),
+                    "sublocations": annotation.get("sublocations", []),
                     "area_id": annotation.get("area_id"),
                     "sensors": annotation.get("sensors", {}),
                     "monitoring": annotation.get("monitoring", {}),
@@ -360,10 +404,10 @@ class MiseEnPlaceAssistantInventory:
         compact = "".join(character for character in tag_id if character.isalnum())
         return f"Container {compact[-6:].upper() or 'untagged'}"
 
-    def _ensure_write_mode(self) -> None:
-        """Reject service-driven mutations while DEV mode is using mock data."""
-        if self.mock_catalog_enabled():
-            raise ValueError("DEV mode is read-only; use live providers to test CRUD")
+    def _ensure_write_mode(self, *, allow_dev_inventory: bool = False) -> None:
+        """Reject live-provider writes while allowing local DEV inventory exercises."""
+        if self.mock_catalog_enabled() and not allow_dev_inventory:
+            raise ValueError("DEV mode blocks provider writes; use the CRUD simulator for local mock inventory")
 
     async def async_catalog_payload(self) -> dict[str, Any]:
         """Return configured providers' food catalogs and local locations."""
@@ -965,8 +1009,21 @@ class MiseEnPlaceAssistantInventory:
             raise ValueError("Unknown Grocy location")
         return resolved
 
+    def resolve_sublocation(self, location: dict[str, Any], sublocation: str | None = None) -> str:
+        """Return a valid shelf/drawer name for a resolved storage location."""
+        name = self._normalize_optional(sublocation)
+        if not name:
+            return ""
+        if location.get("id") == VOID_LOCATION_ID:
+            raise ValueError("Choose a location before choosing a sublocation")
+        configured = _normalize_sublocations(location.get("sublocations", []))
+        if configured and name.casefold() not in {value.casefold() for value in configured}:
+            raise ValueError("Unknown sublocation for selected location")
+        return name
+
     async def async_create_location_record(
         self, *, name: str, location_type: str = "other", area_id: str | None = None,
+        sublocations: list[str] | None = None,
         sensors: dict[str, str] | None = None, monitoring: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create a local mocked storage location, or reject live provider-owned locations."""
@@ -989,6 +1046,7 @@ class MiseEnPlaceAssistantInventory:
             "id": location_id,
             "name": name,
             "location_type": location_type,
+            "sublocations": _normalize_sublocations(sublocations),
             "area_id": self._normalize_optional(area_id),
             "sensors": dict(sensors or {}),
             "monitoring": dict(monitoring or {}),
@@ -1027,6 +1085,7 @@ class MiseEnPlaceAssistantInventory:
             "id": location_id,
             **({"name": updates["name"]} if self.mock_catalog_enabled() and updates.get("name") else {}),
             "location_type": location_type,
+            "sublocations": _normalize_sublocations(updates.get("sublocations", annotation.get("sublocations", []))),
             "area_id": self._normalize_optional(updates.get("area_id", annotation.get("area_id"))),
             "sensors": dict(updates.get("sensors", annotation.get("sensors", {}))),
             "monitoring": dict(updates.get("monitoring", annotation.get("monitoring", {}))),
@@ -1056,6 +1115,7 @@ class MiseEnPlaceAssistantInventory:
                 if container.get("location_id") == location_id:
                     container["location_id"] = VOID_LOCATION_ID
                     container["location"] = VOID_LOCATION_NAME
+                    container["sublocation"] = ""
                     container["updated_at"] = _utc_now()
             removed = 1 if len(self.data["storage_locations"]) != before else 0
             self._add_log_entry("Location deleted", f"{location['name']} was removed as an inventory location.", {"location_id": location_id})
@@ -1233,6 +1293,7 @@ class MiseEnPlaceAssistantInventory:
         quantity: int | float = 0,
         location: str | None = None,
         location_id: str | None = None,
+        sublocation: str | None = None,
         unit: str = DEFAULT_UNIT,
         item_id: str | None = None,
         item_label: str | None = None,
@@ -1245,13 +1306,14 @@ class MiseEnPlaceAssistantInventory:
         opened_date: str | None = None,
         price: int | float | None = None,
     ) -> None:
-        self._ensure_write_mode()
+        self._ensure_write_mode(allow_dev_inventory=True)
         await self._async_create_container(
             tag_id=tag_id,
             name=name,
             quantity=quantity,
             location=location,
             location_id=location_id,
+            sublocation=sublocation,
             unit=unit,
             item_id=item_id,
             item_label=item_label,
@@ -1273,6 +1335,7 @@ class MiseEnPlaceAssistantInventory:
         quantity: int | float = 0,
         location: str | None = None,
         location_id: str | None = None,
+        sublocation: str | None = None,
         unit: str = DEFAULT_UNIT,
         item_id: str | None = None,
         item_label: str | None = None,
@@ -1290,6 +1353,7 @@ class MiseEnPlaceAssistantInventory:
         quantity_data = normalize_quantity(quantity, unit)
         resolved_location = self.resolve_location(location, location_id)
         location = resolved_location["name"]
+        sublocation = self.resolve_sublocation(resolved_location, sublocation)
         now = _utc_now()
         is_new = not old
         if content_kind not in {"ingredient", "recipe", "meal"}:
@@ -1310,6 +1374,7 @@ class MiseEnPlaceAssistantInventory:
             **quantity_data,
             "location": location,
             "location_id": resolved_location["id"],
+            "sublocation": sublocation,
             "unit": unit or DEFAULT_UNIT,
             "created_at": old.get("created_at", now),
             "updated_at": now,
@@ -1333,7 +1398,7 @@ class MiseEnPlaceAssistantInventory:
         self._add_log_entry(
             "Container created" if is_new else "Container refilled",
             f"{self.containers[tag_id]['name']} now contains {self.containers[tag_id]['item_label'] or 'nothing'} in {location or 'no location'}.",
-            {"tag_id": tag_id, "quantity": quantity_data["quantity"], "unit": quantity_data["unit"], "canonical_quantity": quantity_data["canonical_quantity"], "canonical_unit": quantity_data["canonical_unit"], "location": location,
+            {"tag_id": tag_id, "quantity": quantity_data["quantity"], "unit": quantity_data["unit"], "canonical_quantity": quantity_data["canonical_quantity"], "canonical_unit": quantity_data["canonical_unit"], "location": location, "sublocation": sublocation,
              "product": self.product_snapshot(self.containers[tag_id])},
         )
         await self.async_save()
@@ -1343,17 +1408,21 @@ class MiseEnPlaceAssistantInventory:
         tags = {str(tag).casefold() for tag in recipe.get("tags", [])}
         component = next((tag[14:] for tag in tags if tag.startswith("mpa:component:")), None)
         protein = next((tag[20:] for tag in tags if tag.startswith("mpa:primary-protein:")), None)
+        if protein:
+            protein = PROTEIN_GROUP_ALIASES.get(protein, protein)
         return {key: value for key, value in {"component": component, "primary_protein": protein}.items() if value}
 
     async def async_create_recipe_container(
         self, *, recipe_id: str, content_kind: str, tag_id: str, name: str | None = None,
         quantity: int | float = 0, location: str | None = None, location_id: str | None = None,
+        sublocation: str | None = None,
     ) -> None:
         """Create a portion-counted recipe or ready-meal container."""
-        self._ensure_write_mode()
+        self._ensure_write_mode(allow_dev_inventory=True)
         recipe = await self.async_recipe_item(recipe_id)
         await self._async_create_container(
             tag_id=tag_id, name=name, quantity=quantity, location=location, location_id=location_id,
+            sublocation=sublocation,
             unit=recipe["unit"], item_id=recipe["id"], item_label=recipe["label"],
             item_format=recipe["format"], source_provider=self.recipe_provider_for_item(recipe),
             content_kind=content_kind, classification=self._recipe_classification(recipe),
@@ -1408,6 +1477,7 @@ class MiseEnPlaceAssistantInventory:
         delta: int | float | None = None,
         location: str | None = None,
         location_id: str | None = None,
+        sublocation: str | None = None,
         name: str | None = None,
         unit: str | None = None,
         item_id: str | None = None,
@@ -1420,13 +1490,14 @@ class MiseEnPlaceAssistantInventory:
         opened_date: str | None = None,
         price: int | float | None = None,
     ) -> None:
-        self._ensure_write_mode()
+        self._ensure_write_mode(allow_dev_inventory=True)
         await self._async_update_container(
             tag_id=tag_id,
             quantity=quantity,
             delta=delta,
             location=location,
             location_id=location_id,
+            sublocation=sublocation,
             name=name,
             unit=unit,
             item_id=item_id,
@@ -1448,6 +1519,7 @@ class MiseEnPlaceAssistantInventory:
         delta: int | float | None = None,
         location: str | None = None,
         location_id: str | None = None,
+        sublocation: str | None = None,
         name: str | None = None,
         unit: str | None = None,
         item_id: str | None = None,
@@ -1502,6 +1574,12 @@ class MiseEnPlaceAssistantInventory:
             resolved_location = self.resolve_location(location, location_id)
             candidate["location"] = resolved_location["name"]
             candidate["location_id"] = resolved_location["id"]
+            candidate["sublocation"] = self.resolve_sublocation(resolved_location, sublocation)
+        elif sublocation is not None:
+            candidate["sublocation"] = self.resolve_sublocation(
+                self.resolve_location(location_id=candidate.get("location_id")),
+                sublocation,
+            )
         if name is not None:
             candidate["name"] = self._normalize_optional(name) or self.default_container_name(tag_id)
         if item_id is not None:
@@ -1547,12 +1625,12 @@ class MiseEnPlaceAssistantInventory:
 
     async def async_clear_container(self, tag_id: str) -> None:
         """Empty a known container without deleting its identity or product attribution."""
-        self._ensure_write_mode()
+        self._ensure_write_mode(allow_dev_inventory=True)
         await self._async_update_container(tag_id=tag_id, quantity=0)
 
     async def async_archive_container(self, tag_id: str) -> None:
         """Retire an empty container from active inventory without deleting history."""
-        self._ensure_write_mode()
+        self._ensure_write_mode(allow_dev_inventory=True)
         tag_id = self._normalize_tag_id(tag_id)
         if tag_id not in self.containers:
             raise KeyError(tag_id)
@@ -1570,7 +1648,7 @@ class MiseEnPlaceAssistantInventory:
 
     async def async_restore_container(self, tag_id: str) -> None:
         """Return an archived container to active rotation."""
-        self._ensure_write_mode()
+        self._ensure_write_mode(allow_dev_inventory=True)
         tag_id = self._normalize_tag_id(tag_id)
         if tag_id not in self.containers:
             raise KeyError(tag_id)
@@ -1583,6 +1661,91 @@ class MiseEnPlaceAssistantInventory:
         container["updated_at"] = now
         self._add_log_entry("Container restored", f"{container['name']} returned to active rotation.", {"tag_id": tag_id})
         await self.async_save()
+
+    async def async_simulate_crud(self) -> dict[str, Any]:
+        """Exercise local DEV-mode CRUD paths without touching live providers."""
+        if not self.mock_catalog_enabled():
+            raise ValueError("CRUD simulation is available only in DEV mode")
+        base_location = next(
+            (location for location in self.storage_locations() if location.get("id") != VOID_LOCATION_ID),
+            None,
+        )
+        if base_location is None:
+            raise ValueError("CRUD simulation needs at least one storage location")
+
+        tag_id = "dev:crud-simulation"
+        item = await self.async_catalog_item("mocked:baby-spinach")
+        for location in list(self.storage_locations()):
+            if (
+                location.get("provider") == PROVIDER_MOCKED
+                and location.get("local")
+                and location.get("name") in {"DEV CRUD Simulation", "DEV CRUD Simulation Updated"}
+            ):
+                await self.async_delete_location(location["id"])
+        created_location = await self.async_create_location_record(
+            name="DEV CRUD Simulation",
+            location_type="fridge",
+            sublocations=["Top shelf", "Bottom drawer"],
+        )
+        location_id = created_location["id"]
+        steps: list[str] = ["location.create"]
+        await self.async_update_location(
+            location_id,
+            name="DEV CRUD Simulation Updated",
+            location_type="fridge",
+            sublocations=["Top shelf", "Bottom drawer", "Door bin"],
+        )
+        steps.append("location.update")
+        if not self.location_for_id(location_id):
+            raise ValueError("CRUD simulation failed to read created location")
+        steps.append("location.read")
+
+        await self.async_create_container(
+            tag_id=tag_id,
+            name="DEV CRUD Tub",
+            quantity=1,
+            location_id=location_id,
+            sublocation="Top shelf",
+            unit=item["unit"],
+            item_id=item["id"],
+            item_label=item["label"],
+            item_format=item["format"],
+            source_provider=item.get("provider", PROVIDER_MOCKED),
+        )
+        steps.append("container.create")
+        if tag_id not in self.containers:
+            raise ValueError("CRUD simulation failed to read created container")
+        steps.append("container.read")
+        await self.async_update_container(
+            tag_id=tag_id,
+            quantity=2,
+            name="DEV CRUD Tub Updated",
+            location_id=location_id,
+            sublocation="Bottom drawer",
+        )
+        steps.append("container.update")
+        await self.async_clear_container(tag_id)
+        steps.append("container.clear")
+        await self.async_archive_container(tag_id)
+        steps.append("container.archive")
+        await self.async_restore_container(tag_id)
+        steps.append("container.restore")
+        await self.async_update_container(
+            tag_id=tag_id,
+            location_id=base_location["id"],
+            sublocation="",
+        )
+        steps.append("container.move")
+        await self.async_delete_location(location_id)
+        steps.append("location.delete")
+
+        self._add_log_entry(
+            "DEV CRUD simulation completed",
+            "Local mock location and container CRUD paths completed.",
+            {"steps": steps, "tag_id": tag_id},
+        )
+        await self.async_save()
+        return {"steps": steps, "tag_id": tag_id}
 
     def _kitchenowl_client(self) -> KitchenOwlShoppingClient:
         """Return a KitchenOwl client from validated config-entry data."""
