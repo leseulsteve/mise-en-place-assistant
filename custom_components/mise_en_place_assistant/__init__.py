@@ -81,7 +81,8 @@ ATTR_CONTAINER_POLICY = "container_policy"
 ATTR_STORAGE_BEHAVIOR = "storage_behavior"
 ATTR_MEAL_ROLE = "meal_role"
 ATTR_AVAILABLE_IN_MEALIE = "available_in_mealie"
-ATTR_NOTES = "notes"
+ATTR_REQUEST_ID = "request_id"
+ATTR_SOURCE_PROVIDER = "source_provider"
 
 SCAN_MODES = ["set", "add", "remove"]
 
@@ -379,7 +380,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 storage_behavior=call.data.get(ATTR_STORAGE_BEHAVIOR, "unknown"),
                 meal_role=call.data.get(ATTR_MEAL_ROLE, "unknown"),
                 available_in_mealie=call.data.get(ATTR_AVAILABLE_IN_MEALIE),
-                notes=call.data.get(ATTR_NOTES),
             )
         except (MealieCatalogError, ValueError) as err:
             raise ServiceValidationError(str(err)) from err
@@ -574,7 +574,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Required(ATTR_STORAGE_BEHAVIOR): vol.In(PRODUCT_STORAGE_BEHAVIORS),
                 vol.Required(ATTR_MEAL_ROLE): vol.In(PRODUCT_MEAL_ROLES),
                 vol.Required(ATTR_AVAILABLE_IN_MEALIE): cv.boolean,
-                vol.Optional(ATTR_NOTES, default=""): cv.string,
             }
         ),
     )
@@ -655,56 +654,99 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except HomeAssistantError as err:
             _LOGGER.warning("Could not call ESPHome action esphome.%s: %s", service, err)
 
-    async def show_dial_operation_result(tag_id: str, *, success: bool, message: str) -> None:
+    def _event_request_id(event) -> int:
+        """Return the Dial request id, or 0 for older firmware."""
+        try:
+            return int(event.data.get(ATTR_REQUEST_ID, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    def _dial_success_title(container: dict | None = None, item: dict | None = None) -> str:
+        """Return a concise provider-aware Dial success title."""
+        product = manager.product_for_container(container or {}) if container else None
+        provider = ((product or item or {}).get("source") or {}).get("provider") or (item or {}).get("provider")
+        if provider == "grocy":
+            return "Grocy stock saved"
+        if provider == "mealie" or str(provider).endswith("_recipe"):
+            return "Mealie prep saved"
+        return "Mise saved"
+
+    async def show_dial_operation_result(
+        tag_id: str,
+        *,
+        success: bool,
+        message: str,
+        request_id: int = 0,
+        title: str | None = None,
+    ) -> None:
         """Acknowledge the completed Dial write instead of assuming it succeeded."""
         await call_m5dial(
             "show_operation_result",
             {
                 "tag_id": tag_id,
+                "request_id": request_id,
                 "success": success,
+                "title": title or ("Saved" if success else "Could not save"),
                 "message": message,
             },
         )
 
-    async def show_create_flow(tag_id: str) -> None:
+    async def show_create_flow(tag_id: str, request_id: int = 0) -> None:
         """Tell the M5Dial to show the create-container flow."""
         payload = await manager.async_catalog_payload()
+        dial_items = [
+            {**item, "content_kind": "ingredient"}
+            for item in payload["items"]
+        ] + [
+            {**recipe, "content_kind": "meal", "provider": manager.recipe_provider_for_item(recipe)}
+            for recipe in payload["recipes"]
+        ]
         _LOGGER.info(
-            "Showing Mise en Place Assistant create flow on M5Dial: tag_id=%s items=%d locations=%d",
+            "Showing Mise en Place Assistant create flow on M5Dial: tag_id=%s items=%d locations=%d request_id=%s",
             tag_id,
-            len(payload["items"]),
+            len(dial_items),
             len(payload["locations"]),
+            request_id,
         )
         await call_m5dial(
             "show_create_container",
             {
                 "tag_id": tag_id,
-                "incoming_item_ids": [item["id"] for item in payload["items"]],
-                "incoming_item_labels": [item["label"] for item in payload["items"]],
-                "incoming_item_formats": [item["format"] for item in payload["items"]],
-                "incoming_item_units": [item["unit"] for item in payload["items"]],
+                "request_id": request_id,
+                "incoming_item_ids": [item["id"] for item in dial_items],
+                "incoming_item_labels": [item["label"] for item in dial_items],
+                "incoming_item_formats": [item["format"] for item in dial_items],
+                "incoming_item_units": [item["unit"] for item in dial_items],
+                "incoming_item_providers": [item.get("provider", "") for item in dial_items],
+                "incoming_item_content_kinds": [item.get("content_kind", "ingredient") for item in dial_items],
                 "incoming_location_ids": [location["id"] for location in payload["locations"]],
                 "incoming_location_labels": [location["label"] for location in payload["locations"]],
             },
         )
 
-    async def show_known_flow(tag_id: str, container: dict) -> None:
+    async def show_known_flow(tag_id: str, container: dict, request_id: int = 0) -> None:
         """Tell the M5Dial to show the known-container flow."""
         payload = await manager.async_catalog_payload()
+        product = manager.product_for_container(container) or {}
+        source = product.get("source") or {}
         _LOGGER.info(
-            "Showing Mise en Place Assistant known flow on M5Dial: tag_id=%s quantity=%s location=%s",
+            "Showing Mise en Place Assistant known flow on M5Dial: tag_id=%s quantity=%s location=%s request_id=%s",
             tag_id,
             container.get("quantity"),
             container.get("location"),
+            request_id,
         )
         await call_m5dial(
             "show_known_container",
             {
                 "tag_id": tag_id,
+                "request_id": request_id,
                 "item_label": manager.item_label_for_container(container)
                 or container.get("name")
                 or "Container",
                 "item_format": container.get("item_format") or "",
+                "item_provider": source.get("provider") or "",
+                "content_kind": container.get("content_kind") or "ingredient",
                 "quantity": float(container.get("quantity", 0)),
                 "unit": container.get("unit") or DEFAULT_UNIT,
                 "location_id": container.get("location_id") or "",
@@ -735,13 +777,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not tag_id:
             _LOGGER.debug("Ignoring Mise en Place Assistant scan event without tag_id")
             return
+        request_id = _event_request_id(event)
         container = manager.get_container(tag_id)
         if container:
-            _LOGGER.info("Known Mise en Place Assistant NFC tag scanned: tag_id=%s", tag_id)
-            hass.async_create_task(show_known_flow(tag_id, container))
+            _LOGGER.info("Known Mise en Place Assistant NFC tag scanned: tag_id=%s request_id=%s", tag_id, request_id)
+            hass.async_create_task(show_known_flow(tag_id, container, request_id))
         else:
-            _LOGGER.info("Unknown Mise en Place Assistant NFC tag scanned: tag_id=%s", tag_id)
-            hass.async_create_task(show_create_flow(tag_id))
+            _LOGGER.info("Unknown Mise en Place Assistant NFC tag scanned: tag_id=%s request_id=%s", tag_id, request_id)
+            hass.async_create_task(show_create_flow(tag_id, request_id))
 
     @callback
     def handle_create_from_dial(event) -> None:
@@ -752,6 +795,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not tag_id:
             _LOGGER.debug("Ignoring Mise en Place Assistant create event without tag_id")
             return
+        request_id = _event_request_id(event)
         quantity = event.data.get(ATTR_QUANTITY, 0)
         try:
             quantity = float(quantity)
@@ -765,42 +809,68 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 show_dial_operation_result(
                     tag_id,
                     success=False,
-                    message="Could not save",
+                    request_id=request_id,
+                    title="Bad quantity",
+                    message="Quantity was not a number",
                 )
             )
             return
+        content_kind = event.data.get(ATTR_CONTENT_KIND) or "ingredient"
         _LOGGER.info(
-            "Creating Mise en Place Assistant container from M5Dial: tag_id=%s item_id=%s quantity=%s location=%s",
+            "Creating Mise en Place Assistant container from M5Dial: tag_id=%s item_id=%s quantity=%s location=%s content_kind=%s provider=%s request_id=%s",
             tag_id,
             event.data.get(ATTR_ITEM_ID),
             quantity,
-            event.data.get(ATTR_LOCATION),
+            event.data.get(ATTR_LOCATION_ID),
+            content_kind,
+            event.data.get(ATTR_SOURCE_PROVIDER),
+            request_id,
         )
         async def create_from_mealie() -> None:
             try:
-                item = await manager.async_catalog_item(event.data.get(ATTR_ITEM_ID, ""))
-                await manager.async_create_container(
-                    tag_id=tag_id, quantity=quantity, location_id=event.data.get(ATTR_LOCATION_ID),
-                    unit=item["unit"], item_id=item["id"],
-                    item_label=item["label"], item_format=item["format"],
-                    source_provider=item.get("provider", manager.catalog_provider()),
-                )
+                if content_kind in {"recipe", "meal"}:
+                    item = await manager.async_recipe_item(event.data.get(ATTR_ITEM_ID, ""))
+                    await manager.async_create_recipe_container(
+                        tag_id=tag_id,
+                        quantity=quantity,
+                        location_id=event.data.get(ATTR_LOCATION_ID),
+                        recipe_id=item["id"],
+                        content_kind=content_kind,
+                    )
+                else:
+                    item = await manager.async_catalog_item(event.data.get(ATTR_ITEM_ID, ""))
+                    await manager.async_create_container(
+                        tag_id=tag_id, quantity=quantity, location_id=event.data.get(ATTR_LOCATION_ID),
+                        unit=item["unit"], item_id=item["id"],
+                        item_label=item["label"], item_format=item["format"],
+                        source_provider=item.get("provider", manager.catalog_provider()),
+                    )
             except (MealieCatalogError, ValueError) as err:
                 _LOGGER.warning("Could not create M5Dial container for tag_id=%s: %s", tag_id, err)
                 await show_dial_operation_result(
                     tag_id,
                     success=False,
-                    message="Could not save",
+                    request_id=request_id,
+                    title="Save failed",
+                    message=str(err)[:64] or "Could not save",
                 )
             except Exception:  # noqa: BLE001 - the Dial needs an explicit write failure.
                 _LOGGER.exception("Could not create M5Dial container for tag_id=%s", tag_id)
                 await show_dial_operation_result(
                     tag_id,
                     success=False,
-                    message="Could not save",
+                    request_id=request_id,
+                    title="Save failed",
+                    message="Unexpected Home Assistant error",
                 )
             else:
-                await show_dial_operation_result(tag_id, success=True, message="Saved")
+                await show_dial_operation_result(
+                    tag_id,
+                    success=True,
+                    request_id=request_id,
+                    title=_dial_success_title(item=item),
+                    message=f"{item['label']} at {event.data.get(ATTR_LOCATION) or event.data.get(ATTR_LOCATION_ID) or 'selected location'}",
+                )
 
         hass.async_create_task(create_from_mealie())
 
@@ -813,6 +883,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not tag_id:
             _LOGGER.debug("Ignoring Mise en Place Assistant update event without tag_id")
             return
+        request_id = _event_request_id(event)
         quantity = event.data.get(ATTR_QUANTITY)
         try:
             quantity = float(quantity)
@@ -826,17 +897,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 show_dial_operation_result(
                     tag_id,
                     success=False,
-                    message="Could not save",
+                    request_id=request_id,
+                    title="Bad quantity",
+                    message="Quantity was not a number",
                 )
             )
             return
         _LOGGER.info(
-            "Updating Mise en Place Assistant container from M5Dial: tag_id=%s quantity=%s location=%s",
+            "Updating Mise en Place Assistant container from M5Dial: tag_id=%s quantity=%s location=%s request_id=%s",
             tag_id,
             quantity,
-            event.data.get(ATTR_LOCATION),
+            event.data.get(ATTR_LOCATION_ID),
+            request_id,
         )
         async def update_from_dial() -> None:
+            before = manager.get_container(tag_id)
             try:
                 await manager.async_update_container(
                     tag_id=tag_id,
@@ -848,17 +923,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await show_dial_operation_result(
                     tag_id,
                     success=False,
-                    message="Could not save",
+                    request_id=request_id,
+                    title="Save failed",
+                    message=str(err)[:64] or "Could not save",
                 )
             except Exception:  # noqa: BLE001 - the Dial needs an explicit write failure.
                 _LOGGER.exception("Could not update M5Dial container for tag_id=%s", tag_id)
                 await show_dial_operation_result(
                     tag_id,
                     success=False,
-                    message="Could not save",
+                    request_id=request_id,
+                    title="Save failed",
+                    message="Unexpected Home Assistant error",
                 )
             else:
-                await show_dial_operation_result(tag_id, success=True, message="Saved")
+                after = manager.get_container(tag_id) or before
+                await show_dial_operation_result(
+                    tag_id,
+                    success=True,
+                    request_id=request_id,
+                    title=_dial_success_title(after),
+                    message=f"{quantity:g} {(after or {}).get('unit') or DEFAULT_UNIT} at {event.data.get(ATTR_LOCATION) or (after or {}).get('location') or 'selected location'}",
+                )
 
         hass.async_create_task(update_from_dial())
 

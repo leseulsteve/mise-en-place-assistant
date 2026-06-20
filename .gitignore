@@ -9,7 +9,5 @@ venv/
 dist/
 build/
 scripts/
-AGENTS.md
-CHANGELOG.md
+*.md
 Mise_en_place_Assistant_plan.txt
-README.md

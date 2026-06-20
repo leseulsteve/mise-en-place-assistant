@@ -38,30 +38,44 @@ api:
     - action: show_create_container
       variables:
         tag_id: string
+        request_id: int
         incoming_item_ids: string[]
         incoming_item_labels: string[]
         incoming_item_formats: string[]
         incoming_item_units: string[]
+        incoming_item_providers: string[]
+        incoming_item_content_kinds: string[]
         incoming_location_ids: string[]
         incoming_location_labels: string[]
       then:
         - lambda: |-
-            id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id;
+            id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id && id(active_request_id) == request_id;
             if (!id(ha_response_accepted)) {
-              ESP_LOGW("mise_en_place_assistant", "Ignoring stale create response: tag=%s view=%d", tag_id.c_str(), id(current_view));
+              ESP_LOGW("mise_en_place_assistant", "Ignoring stale create response: tag=%s request=%d active=%d view=%d", tag_id.c_str(), request_id, id(active_request_id), id(current_view));
             } else {
               id(last_tag_id) = tag_id;
+              id(active_request_id) = request_id;
               id(item_ids) = incoming_item_ids;
               id(item_labels) = incoming_item_labels;
               id(item_formats) = incoming_item_formats;
               id(item_units) = incoming_item_units;
+              id(item_providers) = incoming_item_providers;
+              id(item_content_kinds) = incoming_item_content_kinds;
               id(location_ids) = incoming_location_ids;
               id(locations) = incoming_location_labels;
               id(selected_item_index) = 0;
               id(selected_location_index) = 0;
+              id(selected_item_id).clear();
+              id(selected_item_label).clear();
+              id(selected_item_format).clear();
+              id(selected_item_unit) = "items";
+              id(selected_item_provider).clear();
+              id(selected_content_kind) = "ingredient";
+              id(selected_location_id).clear();
+              id(selected_location_label).clear();
               id(inventory_qty) = 0;
               id(current_view) = 10;
-              ESP_LOGI("mise_en_place_assistant", "Create flow loaded: tag=%s items=%d locations=%d", tag_id.c_str(), (int) incoming_item_labels.size(), (int) incoming_location_labels.size());
+              ESP_LOGI("mise_en_place_assistant", "Create flow loaded: tag=%s request=%d items=%d locations=%d", tag_id.c_str(), request_id, (int) incoming_item_labels.size(), (int) incoming_location_labels.size());
             }
         - if:
             condition:
@@ -74,8 +88,11 @@ api:
     - action: show_known_container
       variables:
         tag_id: string
+        request_id: int
         item_label: string
         item_format: string
+        item_provider: string
+        content_kind: string
         quantity: float
         unit: string
         location_id: string
@@ -84,20 +101,28 @@ api:
         incoming_location_labels: string[]
       then:
         - lambda: |-
-            id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id;
+            id(ha_response_accepted) = id(current_view) == 1 && id(last_tag_id) == tag_id && id(active_request_id) == request_id;
             if (!id(ha_response_accepted)) {
-              ESP_LOGW("mise_en_place_assistant", "Ignoring stale known-container response: tag=%s view=%d", tag_id.c_str(), id(current_view));
+              ESP_LOGW("mise_en_place_assistant", "Ignoring stale known-container response: tag=%s request=%d active=%d view=%d", tag_id.c_str(), request_id, id(active_request_id), id(current_view));
             } else {
               id(last_tag_id) = tag_id;
+              id(active_request_id) = request_id;
               id(selected_item_label) = item_label;
               id(selected_item_format) = item_format;
+              id(selected_item_provider) = item_provider;
+              id(selected_content_kind) = content_kind.empty() ? "ingredient" : content_kind;
               id(selected_item_unit) = unit;
               id(selected_location_id) = location_id;
               id(selected_location_label) = location_label;
               id(location_ids) = incoming_location_ids;
               id(locations) = incoming_location_labels;
               id(selected_location_index) = 0;
-              for (int i = 0; i < (int) id(locations).size(); i++) {
+              int location_choice_count = id(locations).size();
+              if ((int) id(location_ids).size() < location_choice_count) {
+                location_choice_count = id(location_ids).size();
+                ESP_LOGW("mise_en_place_assistant", "Known flow location payload is mismatched: labels=%d ids=%d", (int) id(locations).size(), (int) id(location_ids).size());
+              }
+              for (int i = 0; i < location_choice_count; i++) {
                 if (id(location_ids)[i] == location_id) {
                   id(selected_location_index) = i;
                   break;
@@ -105,7 +130,7 @@ api:
               }
               id(inventory_qty) = quantity;
               id(current_view) = 20;
-              ESP_LOGI("mise_en_place_assistant", "Known flow loaded: tag=%s item=%s quantity=%g location=%s choices=%d", tag_id.c_str(), item_label.c_str(), quantity, location_label.c_str(), (int) incoming_location_labels.size());
+              ESP_LOGI("mise_en_place_assistant", "Known flow loaded: tag=%s request=%d item=%s provider=%s kind=%s quantity=%g location=%s choices=%d", tag_id.c_str(), request_id, item_label.c_str(), id(selected_item_provider).c_str(), id(selected_content_kind).c_str(), quantity, location_label.c_str(), (int) incoming_location_labels.size());
             }
         - if:
             condition:
@@ -117,14 +142,17 @@ api:
     - action: show_operation_result
       variables:
         tag_id: string
+        request_id: int
         success: bool
+        title: string
         message: string
       then:
         - lambda: |-
-            id(ha_response_accepted) = id(current_view) == 29 && id(last_tag_id) == tag_id;
+            id(ha_response_accepted) = id(current_view) == 29 && id(last_tag_id) == tag_id && id(active_request_id) == request_id;
             if (!id(ha_response_accepted)) {
-              ESP_LOGW("mise_en_place_assistant", "Ignoring stale operation result: tag=%s view=%d", tag_id.c_str(), id(current_view));
+              ESP_LOGW("mise_en_place_assistant", "Ignoring stale operation result: tag=%s request=%d active=%d view=%d", tag_id.c_str(), request_id, id(active_request_id), id(current_view));
             } else {
+              id(result_title) = title.empty() ? (success ? "Saved" : "Could not save") : title;
               id(error_message) = message;
               id(current_view) = success ? 30 : 31;
             }
@@ -144,6 +172,18 @@ api:
             then:
               - script.stop: operation_timeout
               - script.execute: show_page
+
+    - action: show_mise_listening
+      then:
+        - script.stop: scan_timeout
+        - script.stop: operation_timeout
+        - lambda: |-
+            id(ha_response_accepted) = false;
+            id(active_request_id) = 0;
+            id(last_tag_id).clear();
+            id(current_view) = 40;
+            ESP_LOGI("mise_en_place_assistant", "Showing Mise listening view");
+        - script.execute: show_page
 
     - action: set_theme
       variables:
@@ -494,7 +534,7 @@ binary_sensor:
     filters:
       - delayed_on_off: 10ms
     on_press:
-      - script.execute: on_long_press
+      - script.execute: cancel_flow
 
 sensor:
   - platform: wifi_signal
@@ -585,6 +625,7 @@ text_sensor:
         case 29: return {"Saving"};
         case 30: return {"Saved"};
         case 31: return {"Home Assistant timeout"};
+        case 40: return {"Mise listening"};
         default: return {"Unknown"};
       }
 
@@ -651,6 +692,14 @@ globals:
     type: bool
     initial_value: "false"
 
+  - id: active_request_id
+    type: int
+    initial_value: "0"
+
+  - id: next_request_id
+    type: int
+    initial_value: "0"
+
   - id: last_tag_id
     type: std::string
     initial_value: '""'
@@ -668,6 +717,14 @@ globals:
     initial_value: "std::vector<std::string>()"
 
   - id: item_units
+    type: std::vector<std::string>
+    initial_value: "std::vector<std::string>()"
+
+  - id: item_providers
+    type: std::vector<std::string>
+    initial_value: "std::vector<std::string>()"
+
+  - id: item_content_kinds
     type: std::vector<std::string>
     initial_value: "std::vector<std::string>()"
 
@@ -703,6 +760,14 @@ globals:
     type: std::string
     initial_value: '"items"'
 
+  - id: selected_item_provider
+    type: std::string
+    initial_value: '""'
+
+  - id: selected_content_kind
+    type: std::string
+    initial_value: '"ingredient"'
+
   - id: selected_location_label
     type: std::string
     initial_value: '""'
@@ -719,6 +784,10 @@ globals:
   - id: error_message
     type: std::string
     initial_value: '"Home Assistant did not reply"'
+
+  - id: result_title
+    type: std::string
+    initial_value: '"Saved"'
 
 # ─────────────────────────────
 # SCRIPTS (NO INVALID IF SHORTCUTS)
@@ -844,6 +913,7 @@ script:
       - lambda: |-
           ESP_LOGI("mise_en_place_assistant", "Cancelling Dial flow: view=%d tag=%s", id(current_view), id(last_tag_id).c_str());
           id(ha_response_accepted) = false;
+          id(active_request_id) = 0;
           id(last_tag_id).clear();
           id(current_view) = 0;
       - script.execute: show_page
@@ -959,6 +1029,12 @@ script:
             lambda: 'return id(current_view) == 31;'
           then:
             - lvgl.page.show: page_error
+
+      - if:
+          condition:
+            lambda: 'return id(current_view) == 40;'
+          then:
+            - lvgl.page.show: page_mise_listening
       - script.execute: refresh_ui
 
   - id: scan_timeout
@@ -971,6 +1047,7 @@ script:
           then:
             - lambda: |-
                 ESP_LOGW("mise_en_place_assistant", "Scan timed out waiting for Home Assistant response: tag=%s", id(last_tag_id).c_str());
+                id(result_title) = "No reply";
                 id(error_message) = "Home Assistant did not reply";
                 id(current_view) = 31;
             - script.execute: sound_attention
@@ -986,6 +1063,7 @@ script:
           then:
             - lambda: |-
                 ESP_LOGW("mise_en_place_assistant", "Save confirmation timed out: tag=%s", id(last_tag_id).c_str());
+                id(result_title) = "Not confirmed";
                 id(error_message) = "Save not confirmed";
                 id(current_view) = 31;
             - script.execute: sound_attention
@@ -1031,12 +1109,24 @@ script:
           ESP_LOGD("mise_en_place_assistant", "Button short press: view=%d tag=%s", id(press_view), id(last_tag_id).c_str());
       - if:
           condition:
-            lambda: 'return id(press_view) == 10;'
+            lambda: 'return id(press_view) == 10 && !id(selected_item_id).empty();'
           then:
             - lambda: |-
                 ESP_LOGI("mise_en_place_assistant", "Item selected: id=%s label=%s format=%s unit=%s", id(selected_item_id).c_str(), id(selected_item_label).c_str(), id(selected_item_format).c_str(), id(selected_item_unit).c_str());
                 id(current_view) = 11;
             - script.execute: sound_advance
+            - script.execute: show_page
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 10 && id(selected_item_id).empty();'
+          then:
+            - lambda: |-
+                ESP_LOGW("mise_en_place_assistant", "Cannot continue create flow without a selected item ID");
+                id(result_title) = "Catalog missing";
+                id(error_message) = "Catalog item unavailable";
+                id(current_view) = 31;
+            - script.execute: sound_attention
             - script.execute: show_page
 
       - if:
@@ -1051,7 +1141,7 @@ script:
 
       - if:
           condition:
-            lambda: 'return id(press_view) == 13 && !id(last_tag_id).empty();'
+            lambda: 'return id(press_view) == 13 && !id(last_tag_id).empty() && !id(selected_item_id).empty() && !id(selected_location_id).empty();'
           then:
             - lambda: |-
                 ESP_LOGI("mise_en_place_assistant", "Creating container: tag=%s item=%s qty=%g location=%s", id(last_tag_id).c_str(), id(selected_item_label).c_str(), id(inventory_qty), id(selected_location_label).c_str());
@@ -1065,10 +1155,26 @@ script:
                   item_id: !lambda 'return id(selected_item_id);'
                   item_label: !lambda 'return id(selected_item_label);'
                   item_format: !lambda 'return id(selected_item_format);'
+                  source_provider: !lambda 'return id(selected_item_provider);'
+                  content_kind: !lambda 'return id(selected_content_kind);'
                   unit: !lambda 'return id(selected_item_unit);'
                   quantity: !lambda 'return std::to_string(id(inventory_qty));'
                   location_id: !lambda 'return id(selected_location_id);'
+                  location: !lambda 'return id(selected_location_label);'
+                  request_id: !lambda 'return std::to_string(id(active_request_id));'
                   source: "${device_name}"
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 13 && (id(last_tag_id).empty() || id(selected_item_id).empty() || id(selected_location_id).empty());'
+          then:
+            - lambda: |-
+                ESP_LOGW("mise_en_place_assistant", "Cannot create container with incomplete selection: tag=%s item_id=%s location_id=%s", id(last_tag_id).c_str(), id(selected_item_id).c_str(), id(selected_location_id).c_str());
+                id(result_title) = "Selection missing";
+                id(error_message) = "Selection unavailable";
+                id(current_view) = 31;
+            - script.execute: sound_attention
+            - script.execute: show_page
 
       - if:
           condition:
@@ -1095,6 +1201,8 @@ script:
                   tag_id: !lambda 'return id(last_tag_id);'
                   quantity: !lambda 'return std::to_string(id(inventory_qty));'
                   location_id: !lambda 'return id(selected_location_id);'
+                  location: !lambda 'return id(selected_location_label);'
+                  request_id: !lambda 'return std::to_string(id(active_request_id));'
                   source: "${device_name}"
 
       - if:
@@ -1105,19 +1213,39 @@ script:
             - script.execute: sound_advance
             - script.execute: show_page
 
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 40;'
+          then:
+            - lambda: 'id(current_view) = 0;'
+            - script.execute: sound_advance
+            - script.execute: show_page
+
   - id: on_long_press
     then:
-      - script.execute: sound_cancel
-      - script.execute: cancel_flow
+      - script.execute: sound_advance
+      - script.stop: scan_timeout
+      - script.stop: operation_timeout
+      - lambda: |-
+          ESP_LOGI("mise_en_place_assistant", "Long press showing Mise listening view from view=%d", id(current_view));
+          id(ha_response_accepted) = false;
+          id(active_request_id) = 0;
+          id(last_tag_id).clear();
+          id(current_view) = 40;
+      - script.execute: show_page
 
   - id: on_nfc
     then:
       - script.execute: wake_display
       - rtttl.play: "tag:d=32,o=6,b=180:16g6"
       - lambda: |-
+          id(next_request_id)++;
+          if (id(next_request_id) <= 0) id(next_request_id) = 1;
+          id(active_request_id) = id(next_request_id);
           ESP_LOGI("mise_en_place_assistant", "NFC tag scanned: %s", id(last_tag_id).c_str());
           id(ha_response_accepted) = false;
           id(error_message) = "Home Assistant did not reply";
+          id(result_title) = "Waiting";
           id(current_view) = 1;
           id(inventory_qty) = 0;
       - script.execute: show_page
@@ -1125,12 +1253,22 @@ script:
           event: esphome.mise_en_place_assistant_scan
           data:
             tag_id: !lambda 'return id(last_tag_id);'
+            request_id: !lambda 'return std::to_string(id(active_request_id));'
             source: "${device_name}"
       - script.execute: scan_timeout
 
   - id: sync_selection
     then:
       - lambda: |-
+          const bool selecting_catalog_item = id(current_view) == 10 || id(current_view) == 11 || id(current_view) == 13;
+          if (selecting_catalog_item) {
+            id(selected_item_id).clear();
+            id(selected_item_label).clear();
+            id(selected_item_format).clear();
+            id(selected_item_unit) = "items";
+            id(selected_item_provider).clear();
+            id(selected_content_kind) = "ingredient";
+          }
           if (!id(item_labels).empty()) {
             if (id(selected_item_index) < 0) id(selected_item_index) = 0;
             if (id(selected_item_index) >= (int) id(item_labels).size()) id(selected_item_index) = id(item_labels).size() - 1;
@@ -1145,10 +1283,17 @@ script:
           if (!id(item_units).empty() && id(selected_item_index) < (int) id(item_units).size()) {
             id(selected_item_unit) = id(item_units)[id(selected_item_index)];
           }
+          if (!id(item_providers).empty() && id(selected_item_index) < (int) id(item_providers).size()) {
+            id(selected_item_provider) = id(item_providers)[id(selected_item_index)];
+          }
+          if (!id(item_content_kinds).empty() && id(selected_item_index) < (int) id(item_content_kinds).size()) {
+            id(selected_content_kind) = id(item_content_kinds)[id(selected_item_index)];
+          }
           if (!id(locations).empty()) {
             if (id(selected_location_index) < 0) id(selected_location_index) = 0;
             if (id(selected_location_index) >= (int) id(locations).size()) id(selected_location_index) = id(locations).size() - 1;
             id(selected_location_label) = id(locations)[id(selected_location_index)];
+            id(selected_location_id).clear();
             if (id(selected_location_index) < (int) id(location_ids).size()) {
               id(selected_location_id) = id(location_ids)[id(selected_location_index)];
             }
@@ -1162,7 +1307,11 @@ script:
           text: !lambda 'return id(selected_item_label);'
       - lvgl.label.update:
           id: lbl_item_format
-          text: !lambda 'return id(selected_item_format);'
+          text: !lambda |-
+            std::string meta = id(selected_content_kind);
+            if (!id(selected_item_provider).empty()) meta += " · " + id(selected_item_provider);
+            if (!id(selected_item_format).empty()) meta += " · " + id(selected_item_format);
+            return meta;
       - lvgl.label.update:
           id: lbl_item_count
           text: !lambda 'char value[16]; snprintf(value, sizeof(value), "%g", id(inventory_qty)); return std::string(value) + " " + id(selected_item_unit);'
@@ -1180,7 +1329,11 @@ script:
           text: !lambda 'return id(selected_item_label);'
       - lvgl.label.update:
           id: lbl_known_format
-          text: !lambda 'return id(selected_item_format);'
+          text: !lambda |-
+            std::string meta = id(selected_content_kind);
+            if (!id(selected_item_provider).empty()) meta += " · " + id(selected_item_provider);
+            if (!id(selected_item_format).empty()) meta += " · " + id(selected_item_format);
+            return meta;
       - lvgl.label.update:
           id: lbl_known_qty
           text: !lambda 'char value[16]; snprintf(value, sizeof(value), "%g", id(inventory_qty)); return std::string(value) + " " + id(selected_item_unit);'
@@ -1192,6 +1345,15 @@ script:
           text: !lambda 'return id(selected_location_label);'
       - lvgl.label.update:
           id: lbl_error_message
+          text: !lambda 'return id(error_message);'
+      - lvgl.label.update:
+          id: lbl_error_title
+          text: !lambda 'return id(result_title);'
+      - lvgl.label.update:
+          id: lbl_result_title
+          text: !lambda 'return id(result_title);'
+      - lvgl.label.update:
+          id: lbl_result_message
           text: !lambda 'return id(error_message);'
       - script.execute: refresh_clock
 
@@ -1435,15 +1597,87 @@ lvgl:
             text: "Turn to choose a home"
             text_color: 0x655C66
 
+    - id: page_mise_listening
+      bg_color: 0x000000
+      widgets:
+        - obj:
+            width: 148
+            height: 148
+            align: CENTER
+            y: -14
+            radius: 74
+            bg_opa: TRANSP
+            border_width: 3
+            border_color: 0x655C66
+        - obj:
+            width: 116
+            height: 116
+            align: CENTER
+            y: -14
+            radius: 58
+            bg_opa: TRANSP
+            border_width: 4
+            border_color: 0xC6B4E9
+        - obj:
+            width: 72
+            height: 72
+            align: CENTER
+            y: -14
+            radius: 36
+            bg_opa: TRANSP
+            border_width: 4
+            border_color: 0x91C788
+        - obj:
+            width: 30
+            height: 30
+            align: CENTER
+            y: -14
+            radius: 15
+            bg_color: 0xFFF8EA
+            border_width: 0
+        - obj:
+            width: 12
+            height: 12
+            align: CENTER
+            x: -58
+            y: -14
+            radius: 6
+            bg_color: 0xF1C27D
+            border_width: 0
+        - obj:
+            width: 12
+            height: 12
+            align: CENTER
+            x: 58
+            y: -14
+            radius: 6
+            bg_color: 0xF1C27D
+            border_width: 0
+        - obj:
+            width: 9
+            height: 9
+            align: CENTER
+            y: -88
+            radius: 5
+            bg_color: 0x91C788
+            border_width: 0
+        - label:
+            align: BOTTOM_MID
+            y: -28
+            text: "MISE"
+            text_color: 0xFFF8EA
+
     - id: page_done
       bg_color: 0x000000
       widgets:
         - label:
+            id: lbl_result_title
             align: CENTER
             y: -34
             text: "ALL SET"
             text_color: 0x91C788
         - label:
+            id: lbl_result_message
             align: CENTER
             y: -2
             text: "Your pantry is in order"
@@ -1477,6 +1711,7 @@ lvgl:
       bg_color: 0x000000
       widgets:
         - label:
+            id: lbl_error_title
             align: CENTER
             y: -36
             text: "NOT QUITE"

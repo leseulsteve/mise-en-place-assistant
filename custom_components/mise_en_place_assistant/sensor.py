@@ -1,4 +1,4 @@
-"""Sensors that project the local kitchen model into Home Assistant."""
+"""Sensors that project Mise en Place Assistant workflow state into Home Assistant."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from .store import MiseEnPlaceAssistantInventory
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    """Expose stable container identities and useful aggregate totals."""
+    """Expose stable container and location workflow identities."""
     manager: MiseEnPlaceAssistantInventory = hass.data[DOMAIN][entry.entry_id]
     known_entities: set[str] = set()
 
@@ -29,9 +29,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     def location_entity(key: str) -> list[MiseEnPlaceAssistantBaseSensor]:
         return [MiseEnPlaceAssistantLocationSensor(manager, key)]
 
-    def product_entity(product_id: str) -> list[MiseEnPlaceAssistantBaseSensor]:
-        return [MiseEnPlaceAssistantItemTotalSensor(manager, product_id)]
-
     @callback
     def add_entities(entities: list[MiseEnPlaceAssistantBaseSensor]) -> None:
         new_entities = [entity for entity in entities if entity.entity_key not in known_entities]
@@ -39,18 +36,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             known_entities.update(entity.entity_key for entity in new_entities)
             async_add_entities(new_entities)
 
+    add_entities([MiseEnPlaceAssistantStorageAttentionSensor(manager, entry.entry_id)])
     add_entities([entity for tag_id, container in manager.containers.items() if not container.get("archived") for entity in container_entity(tag_id)])
     add_entities([entity for location in manager.storage_locations() for entity in location_entity(location["id"])])
-    add_entities([entity for product_id in manager.products for entity in product_entity(product_id)])
-
     @callback
     def handle_entity_added(kind: str, key: str) -> None:
         if kind == "container":
             add_entities(container_entity(key))
         elif kind == "location":
             add_entities(location_entity(key))
-        elif kind == "product":
-            add_entities(product_entity(key))
 
     entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED, handle_entity_added))
 
@@ -127,42 +121,37 @@ class MiseEnPlaceAssistantContainerStatusSensor(MiseEnPlaceAssistantBaseSensor):
         return self.manager.containers.get(self.tag_id, {})
 
 
-class MiseEnPlaceAssistantItemTotalSensor(MiseEnPlaceAssistantBaseSensor):
-    """Total of an item across currently filled containers and locations."""
+class MiseEnPlaceAssistantStorageAttentionSensor(MiseEnPlaceAssistantBaseSensor):
+    """Summary sensor for location and storage issues that automations can target."""
 
-    _attr_icon = "mdi:food-apple"
-    _attr_translation_key = "item_total"
+    _attr_icon = "mdi:fridge-alert"
+    _attr_translation_key = "storage_attention"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, manager: MiseEnPlaceAssistantInventory, product_id: str) -> None:
-        super().__init__(manager, f"product_{product_id}_total")
-        self.product_id = product_id
-        self._attr_unique_id = f"{DOMAIN}_product_{slugify(product_id)}_total"
-
-    @property
-    def item(self) -> dict[str, Any]:
-        return self.manager.item_totals().get(self.product_id, {})
-
-    @property
-    def name(self) -> str:
-        return f"{self.item.get('label', self.product_id)} total"
+    def __init__(self, manager: MiseEnPlaceAssistantInventory, entry_id: str) -> None:
+        super().__init__(manager, "storage_attention")
+        self._attr_unique_id = f"{DOMAIN}_{entry_id}_storage_attention"
 
     @property
     def native_value(self) -> StateType:
-        return self.item.get("quantity") if self.item.get("quantity") is not None else "mixed"
-
-    @property
-    def native_unit_of_measurement(self) -> str | None:
-        return self.item.get("unit")
+        return self.summary["status"]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        summary = self.summary
         return {
-            "product_id": self.product_id,
-            "item_id": self.item.get("item_id"),
-            "containers": self.item.get("containers", 0),
-            "locations": self.item.get("locations", {}),
-            "quantities_by_unit": self.item.get("quantities", {}),
+            "attention_count": summary["attention_count"],
+            "containers_needing_location_count": summary["containers_needing_location_count"],
+            "unhealthy_locations_count": summary["unhealthy_locations_count"],
+            "prepared_inventory_at_risk_count": summary["prepared_inventory_at_risk_count"],
+            "containers_needing_location": summary["containers_needing_location"],
+            "unhealthy_locations": summary["unhealthy_locations"],
+            "prepared_inventory_at_risk": summary["prepared_inventory_at_risk"],
         }
+
+    @property
+    def summary(self) -> dict[str, Any]:
+        return self.manager.storage_attention_summary()
 
 
 class MiseEnPlaceAssistantLocationSensor(MiseEnPlaceAssistantBaseSensor):

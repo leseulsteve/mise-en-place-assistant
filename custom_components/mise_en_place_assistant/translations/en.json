@@ -90,11 +90,11 @@
       "container": {
         "name": "Status"
       },
-      "item_total": {
-        "name": "Total"
-      },
       "location": {
         "name": "Containers"
+      },
+      "storage_attention": {
+        "name": "Storage attention"
       }
     }
   }

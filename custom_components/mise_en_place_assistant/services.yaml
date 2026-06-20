@@ -1,5 +1,5 @@
 create_location:
-  description: Storage locations are created in Grocy; this retained service reports that boundary.
+  description: Create a mocked/local storage location; live Grocy storage locations are still created in Grocy.
   fields:
     name:
       required: true
@@ -304,7 +304,7 @@ add_to_shopping_list:
           mode: box
 
 add_empty_containers_to_shopping_list:
-  description: Add unique product labels from empty containers to the preferred shopping list, preserving Grocy product identity where possible and retaining KitchenOwl support.
+  description: Add unique product labels from empty containers to the preferred shopping list, preserving Grocy product identity where possible and including container, unit, location, and reason details in provider notes.
   fields: {}
 
 add_missing_products_to_shopping_list:
@@ -360,6 +360,3 @@ update_product_metadata:
       description: Whether Mise should sync this Grocy product into Mealie Foods for recipe ingredient selection.
       selector:
         boolean:
-    notes:
-      selector:
-        text:

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import date, timedelta
 import logging
 from pathlib import Path
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -191,10 +193,44 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
     low_containers = [
         _container_summary(container, manager)
         for container in containers
-        if 0 < float(container.get("quantity", 0)) <= 2
+        if 0 < float(container.get("canonical_quantity", container.get("quantity", 0))) <= 2
     ]
     item_totals = sorted(
         manager.item_totals(include_empty=False).values(), key=lambda item: item["label"].casefold()
+    )
+    item_totals = _enriched_item_totals(item_totals, containers, manager)
+    foods = manager.catalog_items()
+    recipes = manager.recipe_items()
+    product_attention = manager.product_attention_items()
+    storage_attention = manager.storage_attention_summary()
+    health_counts: dict[str, int] = {"ok": 0, "warning": 0, "critical": 0, "unknown": 0}
+    for location in locations:
+        status = location.get("health", {}).get("status") or "unknown"
+        health_counts[status if status in health_counts else "unknown"] += 1
+    shopping_status = manager.shopping_workflow_status()
+    readiness = _readiness_data(
+        containers=containers,
+        empty_containers=empty_containers,
+        item_totals=item_totals,
+        meal_inventory=manager.meal_inventory(),
+        product_attention=product_attention,
+        locations=locations,
+        logbook=manager.logbook,
+    )
+    planning_comparison = _planning_comparison_data(
+        containers=containers,
+        products=manager.products,
+        meal_inventory=manager.meal_inventory(),
+        item_totals=item_totals,
+        logbook=manager.logbook,
+    )
+    suggested_actions = _suggested_actions_data(
+        containers=containers,
+        empty_containers=empty_containers,
+        product_attention=product_attention,
+        readiness=readiness,
+        shopping=shopping_status,
+        storage_attention=storage_attention,
     )
 
     return {
@@ -205,15 +241,34 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
             "empty": len(empty_containers),
             "low": len(low_containers),
             "archived": len(archived_containers),
+            "product_attention": len(product_attention),
+            "foods": len(foods),
+            "recipes": len(recipes),
+            "ready": len(readiness["ready"]),
+            "missing": len(readiness["missing"]),
+            "unassigned": len(readiness["unassigned"]),
+            "stale": len(readiness["stale"]),
+            "location_at_risk": len(readiness["location_at_risk"]),
         },
         "containers": [_container_summary(container, manager) for container in containers],
         "archived_containers": [_container_summary(container, manager) for container in archived_containers],
         "items": item_totals,
-        "foods": manager.catalog_items(),
-        "product_attention": manager.product_attention_items(),
-        "recipes": manager.recipe_items(),
+        "foods": foods,
+        "product_attention": product_attention,
+        "recipes": recipes,
         "meal_inventory": manager.meal_inventory(),
-        "shopping": manager.shopping_workflow_status(),
+        "readiness": readiness,
+        "planning_comparison": planning_comparison,
+        "suggested_actions": suggested_actions,
+        "shopping": shopping_status,
+        "storage_attention": storage_attention,
+        "operations": {
+            "catalog_providers": manager.effective_catalog_providers(),
+            "shopping_provider": manager.shopping_list_provider(),
+            "dev_mode": manager.mock_catalog_enabled(),
+            "health": health_counts,
+            "attention_total": len(product_attention) + len(empty_containers) + len(low_containers) + storage_attention["attention_count"],
+        },
         "areas": area_options,
         "locations": locations,
         "empty_containers": empty_containers[:8],
@@ -224,6 +279,7 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
 
 def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantInventory | None = None) -> dict[str, Any]:
     """Return display-safe container data."""
+    product = manager.product_for_container(container) if manager else None
     return {
         "tag_id": container.get("tag_id"),
         "name": container.get("name") or "Container",
@@ -244,4 +300,471 @@ def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantI
         "archived_at": container.get("archived_at") or "",
         "updated_at": container.get("updated_at") or "",
         "created_at": container.get("created_at") or "",
+        "recipe": _recipe_summary(container, product, manager),
     }
+
+
+def _recipe_summary(
+    container: dict[str, Any],
+    product: dict[str, Any] | None,
+    manager: MiseEnPlaceAssistantInventory | None,
+) -> dict[str, Any] | None:
+    """Return Mealie recipe metadata for recipe-backed containers."""
+    if container.get("content_kind") not in {"recipe", "meal"} or not product:
+        return None
+    source = product.get("source") or {}
+    source_id = source.get("id")
+    recipe = next(
+        (item for item in manager.recipe_items() if item.get("id") == source_id),
+        {},
+    ) if manager and source_id else {}
+    classification = product.get("classification") or {}
+    return {
+        "id": source_id or "",
+        "provider": source.get("provider") or "",
+        "label": product.get("label") or container.get("item_label") or "",
+        "yield_unit": recipe.get("unit") or product.get("unit") or container.get("unit") or "items",
+        "tags": recipe.get("tags") or [],
+        "categories": recipe.get("categories") or [],
+        "component": classification.get("component") or "",
+        "primary_protein": classification.get("primary_protein") or "",
+    }
+
+
+def _enriched_item_totals(
+    item_totals: list[dict[str, Any]],
+    containers: list[dict[str, Any]],
+    manager: MiseEnPlaceAssistantInventory,
+) -> list[dict[str, Any]]:
+    """Attach matching Mise containers, freshness dates, and recent stock writes to product rows."""
+    by_product: dict[str, list[dict[str, Any]]] = {}
+    for container in containers:
+        if container.get("product_id"):
+            by_product.setdefault(container["product_id"], []).append(container)
+    enriched: list[dict[str, Any]] = []
+    for item in item_totals:
+        row = dict(item)
+        related = by_product.get(item.get("product_id"), [])
+        row["physical_containers"] = [_container_summary(container, manager) for container in related[:6]]
+        row["freshness_dates"] = _product_freshness_dates(related)
+        row["last_stock_log"] = _log_summary(
+            _related_log(
+                manager.logbook,
+                item.get("label") or "",
+                item.get("product_id") or "",
+                item.get("item_id") or "",
+                "Grocy stock",
+                "stock",
+            )
+        )
+        enriched.append(row)
+    return enriched
+
+
+def _product_freshness_dates(containers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return dated stock metadata already accepted by container services."""
+    dates = []
+    for container in containers:
+        values = {
+            "best_before_date": container.get("best_before_date"),
+            "purchased_date": container.get("purchased_date"),
+            "opened_date": container.get("opened_date"),
+            "price": container.get("price"),
+        }
+        if any(value not in (None, "") for value in values.values()):
+            dates.append({"container": container.get("name") or "Container", **values})
+    return dates[:6]
+
+
+def _readiness_data(
+    *,
+    containers: list[dict[str, Any]],
+    empty_containers: list[dict[str, Any]],
+    item_totals: list[dict[str, Any]],
+    meal_inventory: dict[str, Any],
+    product_attention: list[dict[str, Any]],
+    locations: list[dict[str, Any]],
+    logbook: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return dashboard-ready recommendation groups from existing provider data."""
+    recent_log = _recent_provider_log(logbook)
+    today = date.today().isoformat()
+    ready_components = [
+        _readiness_item(
+            entry["component"],
+            _format_quantities(entry.get("quantities", {})),
+            "Prepared component exists in Mise inventory",
+            status="ok",
+            log=_related_log(logbook, entry["component"], *entry.get("recipes", {}).keys()),
+        )
+        for entry in (meal_inventory.get("components") or [])
+    ]
+    stocked_products = [
+        _readiness_item(
+            item["label"],
+            f"{item.get('quantity')} {item.get('unit') or ''}".strip(),
+            "Grocy-backed product has stock",
+            status="ok",
+            log=_related_log(logbook, item["label"], "stock", "Grocy"),
+        )
+        for item in item_totals
+        if item.get("source") == "grocy" and _as_float(item.get("quantity")) > 0
+    ]
+    missing = [
+        _readiness_item(
+            item["label"],
+            f"{item.get('quantity', 0)} {item.get('unit') or ''}".strip() if item.get("has_stock") else "No stock",
+            ", ".join(item.get("reasons") or ["Needs review"]),
+            status="warning",
+            log=_related_log(logbook, item["label"], "review"),
+        )
+        for item in product_attention
+        if not item.get("has_stock") or item.get("reasons")
+    ]
+    unassigned = [
+        _readiness_item(
+            container["name"],
+            container.get("item_label") or "No current item",
+            "Container needs a storage location",
+            status="warning",
+            log=_related_log(logbook, container["name"], container.get("item_label") or "", "location"),
+        )
+        for container in containers
+        if not container.get("location_id") or container.get("location") in {"Unassigned", "The Void"}
+    ]
+    stale = [
+        _readiness_item(
+            container["name"],
+            container.get("best_before_date") or container.get("opened_date") or container.get("purchased_date") or "",
+            "Date needs attention",
+            status="warning",
+            log=_related_log(logbook, container["name"], container.get("item_label") or "", "date"),
+        )
+        for container in containers
+        if (
+            container.get("best_before_date")
+            and str(container.get("best_before_date")) < today
+        )
+    ]
+    location_at_risk = [
+        _readiness_item(
+            location["name"],
+            location.get("health", {}).get("status", "unknown"),
+            "; ".join(location.get("health", {}).get("problems") or ["Location needs attention"]),
+            status="critical" if location.get("health", {}).get("status") == "critical" else "warning",
+            log=_related_log(logbook, location["name"], "location"),
+        )
+        for location in locations
+        if location.get("health", {}).get("status") in {"warning", "critical"}
+    ]
+    return {
+        "ready": (ready_components + stocked_products)[:12],
+        "missing": missing[:12],
+        "empty": [
+            _readiness_item(
+                container["name"],
+                container.get("item_label") or "No current item",
+                "Empty container can be refilled or queued for shopping",
+                status="empty",
+                log=recent_log,
+            )
+            for container in empty_containers[:12]
+        ],
+        "unassigned": unassigned[:12],
+        "stale": stale[:12],
+        "location_at_risk": location_at_risk[:12],
+        "recent_provider_action": recent_log,
+    }
+
+
+def _suggested_actions_data(
+    *,
+    containers: list[dict[str, Any]],
+    empty_containers: list[dict[str, Any]],
+    product_attention: list[dict[str, Any]],
+    readiness: dict[str, Any],
+    shopping: dict[str, Any],
+    storage_attention: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return explainable next actions backed by existing services or views."""
+    actions: list[dict[str, Any]] = []
+    today = date.today()
+    soon = today + timedelta(days=3)
+    if empty_containers:
+        actions.append(
+            _suggested_action(
+                "queue_empty_containers",
+                "Queue empty containers",
+                f"{len(empty_containers)} empty container{'s' if len(empty_containers) != 1 else ''} can become a shopping request.",
+                service="add_empty_containers_to_shopping_list",
+                payload={},
+                status="warning",
+            )
+        )
+    if shopping.get("grocy_minimum_stock"):
+        actions.append(
+            _suggested_action(
+                "queue_grocy_minimum_stock",
+                "Queue Grocy minimum stock",
+                "Grocy already owns below-minimum-stock policy; Mise can ask Grocy to queue it.",
+                service="add_missing_products_to_shopping_list",
+                payload={},
+                status="warning" if readiness.get("missing") else "ok",
+            )
+        )
+    for item in product_attention:
+        if item.get("has_stock"):
+            continue
+        actions.append(
+            _suggested_action(
+                f"queue_product_{item.get('item_id')}",
+                f"Queue {item.get('label') or 'missing product'}",
+                ", ".join(item.get("reasons") or ["Product needs prep or shopping"]),
+                service="add_to_shopping_list",
+                payload={
+                    "item_id": item.get("item_id"),
+                    "quantity": 1,
+                    "description": "Queued from Mise suggested actions; reason=missing_prep_item",
+                },
+                status="warning",
+            )
+        )
+        if len(actions) >= 5:
+            break
+    for container in containers:
+        if container.get("content_kind") not in {"recipe", "meal"}:
+            continue
+        if _as_float(container.get("canonical_quantity", container.get("quantity", 0))) != 0:
+            continue
+        label = container.get("item_label") or container.get("name") or "Prepared batch"
+        actions.append(
+            _suggested_action(
+                f"queue_recipe_{container.get('tag_id')}",
+                f"Queue {label}",
+                "This prepared recipe container is empty, so queue a refill or prep reminder.",
+                service="add_to_shopping_list",
+                payload={
+                    "name": label,
+                    "quantity": 1,
+                    "description": f"Queued from empty Mise recipe container {container.get('name') or container.get('tag_id')}; reason=zero_recipe_container",
+                },
+                status="empty",
+            )
+        )
+        if len(actions) >= 7:
+            break
+    expiring = [
+        container
+        for container in containers
+        if _date_in_range(container.get("best_before_date"), today, soon)
+    ]
+    opened = [
+        container
+        for container in containers
+        if container.get("opened_date") and not container.get("best_before_date")
+    ]
+    stale = readiness.get("stale") or []
+    if stale or expiring or opened:
+        actions.append(
+            _suggested_action(
+                "review_freshness",
+                "Review freshness",
+                f"{len(stale)} stale, {len(expiring)} expiring soon, {len(opened)} opened without a best-before date.",
+                open_tab="inventory",
+                status="warning",
+            )
+        )
+    if storage_attention.get("attention_count"):
+        actions.append(
+            _suggested_action(
+                "review_storage_safety",
+                "Review storage safety",
+                (
+                    f"{storage_attention.get('containers_needing_location_count', 0)} unassigned, "
+                    f"{storage_attention.get('unhealthy_locations_count', 0)} unhealthy locations, "
+                    f"{storage_attention.get('prepared_inventory_at_risk_count', 0)} prepared at risk."
+                ),
+                open_tab="storage",
+                status="critical" if storage_attention.get("status") == "critical" else "warning",
+            )
+        )
+    return actions[:8]
+
+
+def _suggested_action(
+    action_id: str,
+    title: str,
+    because: str,
+    *,
+    status: str,
+    service: str | None = None,
+    payload: dict[str, Any] | None = None,
+    open_tab: str | None = None,
+) -> dict[str, Any]:
+    """Build one panel action with an explicit reason and existing target."""
+    return {
+        "id": action_id,
+        "title": title,
+        "because": because,
+        "status": status,
+        "service": service or "",
+        "payload": payload or {},
+        "open_tab": open_tab or "",
+    }
+
+
+def _date_in_range(value: Any, start: date, end: date) -> bool:
+    """Return whether an ISO date string falls in an inclusive range."""
+    if not value:
+        return False
+    try:
+        parsed = date.fromisoformat(str(value))
+    except ValueError:
+        return False
+    return start <= parsed <= end
+
+
+def _planning_comparison_data(
+    *,
+    containers: list[dict[str, Any]],
+    products: dict[str, dict[str, Any]],
+    meal_inventory: dict[str, Any],
+    item_totals: list[dict[str, Any]],
+    logbook: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compare prepared Mealie components with related Grocy stock rows."""
+    grocy_stock = [item for item in item_totals if item.get("source") == "grocy"]
+    rows: list[dict[str, Any]] = []
+    for component in meal_inventory.get("components") or []:
+        recipe_names = sorted((component.get("recipes") or {}).keys())
+        terms = [component.get("component") or "", *recipe_names]
+        rows.append(
+            {
+                "component": component.get("component") or "Prepared component",
+                "prepared": _format_quantities(component.get("quantities", {})),
+                "recipes": [
+                    {"label": label, "quantity": _format_quantities(quantities)}
+                    for label, quantities in sorted((component.get("recipes") or {}).items())
+                ],
+                "proteins": [
+                    {"label": label, "quantity": _format_quantities(quantities)}
+                    for label, quantities in sorted((component.get("proteins") or {}).items())
+                ],
+                "grocy_stock": _related_stock_rows(grocy_stock, terms),
+                "log": _log_summary(_related_log(logbook, *terms, "recipe", "container")),
+            }
+        )
+    for container in containers:
+        if container.get("content_kind") != "recipe" or _as_float(container.get("canonical_quantity", container.get("quantity", 0))) <= 0:
+            continue
+        product = products.get(container.get("product_id") or "", {})
+        classification = product.get("classification") or {}
+        label = product.get("label") or container.get("item_label") or container.get("name") or "Recipe batch"
+        component = classification.get("component") or label
+        quantity = f"{container.get('canonical_quantity', container.get('quantity', 0))} {container.get('canonical_unit', container.get('unit')) or 'items'}"
+        terms = [component, label]
+        rows.append(
+            {
+                "component": component,
+                "prepared": quantity,
+                "recipes": [{"label": label, "quantity": quantity}],
+                "proteins": [],
+                "grocy_stock": _related_stock_rows(grocy_stock, terms),
+                "log": _log_summary(_related_log(logbook, *terms, "recipe", "container")),
+            }
+        )
+    return sorted(rows, key=lambda row: row["component"].casefold())
+
+
+def _related_stock_rows(item_totals: list[dict[str, Any]], terms: list[str]) -> list[dict[str, Any]]:
+    """Return Grocy stock rows whose labels overlap a prepared component."""
+    term_tokens = {
+        token
+        for term in terms
+        for token in _word_tokens(term)
+        if len(token) > 2
+    }
+    if not term_tokens:
+        return []
+    rows = []
+    for item in item_totals:
+        label_tokens = set(_word_tokens(item.get("label") or ""))
+        if not term_tokens & label_tokens:
+            continue
+        rows.append(
+            {
+                "label": item.get("label") or "Grocy product",
+                "quantity": f"{item.get('quantity', 0)} {item.get('unit') or ''}".strip(),
+                "locations": item.get("locations", {}),
+                "containers": item.get("containers", 0),
+            }
+        )
+    return rows[:4]
+
+
+def _readiness_item(label: str, detail: str, reason: str, *, status: str, log: dict[str, Any] | None) -> dict[str, Any]:
+    """Build one compact readiness row."""
+    return {
+        "label": label,
+        "detail": detail,
+        "reason": reason,
+        "status": status,
+        "log": _log_summary(log) if log else None,
+    }
+
+
+def _recent_provider_log(logbook: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the most recent log entry that explains provider-facing activity."""
+    keywords = ("shopping", "Grocy", "KitchenOwl", "stock", "container", "Location")
+    return next(
+        (
+            entry
+            for entry in reversed(logbook)
+            if any(keyword.casefold() in f"{entry.get('action', '')} {entry.get('message', '')}".casefold() for keyword in keywords)
+        ),
+        None,
+    )
+
+
+def _related_log(logbook: list[dict[str, Any]], *terms: str) -> dict[str, Any] | None:
+    """Return the newest log entry related to a specific readiness row."""
+    tokens = {token for term in terms for token in _word_tokens(term) if len(token) > 2}
+    if not tokens:
+        return _recent_provider_log(logbook)
+    return next(
+        (
+            entry
+            for entry in reversed(logbook)
+            if tokens & set(_word_tokens(f"{entry.get('action', '')} {entry.get('message', '')} {entry.get('details', '')}"))
+        ),
+        _recent_provider_log(logbook),
+    )
+
+
+def _log_summary(entry: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the log fields the panel needs for short explanations."""
+    if not entry:
+        return None
+    return {
+        "action": entry.get("action") or "",
+        "message": entry.get("message") or "",
+        "created_at": entry.get("created_at") or "",
+    }
+
+
+def _format_quantities(quantities: dict[str, Any]) -> str:
+    """Format simple quantity maps for compact panel rows."""
+    return " + ".join(f"{amount} {unit}" for unit, amount in quantities.items()) or "Ready"
+
+
+def _word_tokens(value: Any) -> list[str]:
+    """Normalize labels and log text into comparable tokens."""
+    return re.findall(r"[a-z0-9]+", str(value).casefold())
+
+
+def _as_float(value: Any) -> float:
+    """Return a safe numeric value for provider summaries."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0
