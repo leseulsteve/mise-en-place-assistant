@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Set up Mise en Place Assistant",
-        "description": "Set up inventory, meal planning, grocery lists, food prep, and pantry management.",
+        "description": "Track what is physically prepped, where it lives, whether storage is safe, and what kitchen action should happen next. Mealie owns recipes, Grocy owns stock, KitchenOwl owns shopping, and Home Assistant owns sensors and automations.",
         "data": {
           "initial_locations": "Initial locations",
           "m5dial_service_prefix": "M5Dial ESPHome action prefix",
@@ -20,14 +20,14 @@
       },
       "mealie_entry": {
         "title": "Connect Mealie",
-        "description": "Choose an existing Home Assistant Mealie integration.",
+        "description": "Choose the Mealie integration that owns recipes, foods, and meal-planning context.",
         "data": {
           "mealie_entry_id": "Mealie integration"
         }
       },
       "mealie_manual": {
         "title": "Connect Mealie",
-        "description": "No Home Assistant Mealie integration is configured. Enter its connection details.",
+        "description": "No Home Assistant Mealie integration is configured. Enter connection details for the recipe and food provider.",
         "data": {
           "mealie_url": "Mealie URL",
           "mealie_token": "Mealie API token"
@@ -35,7 +35,7 @@
       },
       "grocy_manual": {
         "title": "Connect Grocy",
-        "description": "Enter Grocy connection details for product data.",
+        "description": "Enter Grocy connection details for durable stock, products, units, storage locations, expiry, and minimum-stock policy.",
         "data": {
           "grocy_url": "Grocy URL",
           "grocy_token": "Grocy API key",
@@ -59,7 +59,7 @@
     "step": {
       "init": {
         "title": "Mise en Place Assistant options",
-        "description": "Locations listed here will be created if they do not already exist.",
+        "description": "Adjust provider connections and the physical prep layer: NFC containers, M5Dial workflows, storage attention, and shopping targets.",
         "data": {
           "initial_locations": "Locations",
           "m5dial_service_prefix": "M5Dial ESPHome action prefix",

@@ -320,9 +320,28 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         .row:first-of-type { border-top: 0; }
         .review-row { grid-template-columns: 1fr; align-items: stretch; }
         .compact-row { grid-template-columns: minmax(0, 1fr); }
+        .row-side {
+          display: grid;
+          gap: 8px;
+          justify-items: end;
+        }
         .name { font-weight: 650; overflow-wrap: anywhere; }
         .subline { margin-top: 3px; }
         .readiness-card { margin-bottom: 18px; }
+        .action-context-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.35fr);
+          gap: 14px;
+          align-items: start;
+        }
+        .action-context-panel {
+          min-width: 0;
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          padding: 12px;
+          background: var(--secondary-background-color, rgba(128,128,128,.06));
+        }
+        .action-context-panel h3 { margin-bottom: 8px; }
         .readiness-grid {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -356,6 +375,13 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         .warn, .warning { color: var(--warning-color, #ff9800); }
         .empty, .critical { color: var(--error-color, #f44336); }
         .ok { color: var(--success-color, #43a047); }
+        .state {
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          color: var(--secondary-text-color);
+          background: var(--secondary-background-color, rgba(128,128,128,.06));
+          padding: 10px 11px;
+        }
         .qty { font-weight: 750; text-align: right; white-space: nowrap; }
         .container-actions {
           display: grid;
@@ -401,10 +427,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .ops-strip { grid-template-columns: 1fr; }
           .sections { grid-template-columns: 1fr; }
+          .action-context-grid { grid-template-columns: 1fr; }
           .readiness-grid { grid-template-columns: 1fr; }
           .compare-grid { grid-template-columns: 1fr; }
           .form-grid, .review-grid, .inline-grid, .debug-grid, .container-actions { grid-template-columns: 1fr; }
           .row { grid-template-columns: 1fr; }
+          .row-side { justify-items: start; }
           .qty { text-align: left; }
         }
       </style>
@@ -477,14 +505,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         ${this._metric("Empty", summary.empty ?? empty.length, empty.length ? "empty" : "")}
         ${this._metric("Storage attention", storageAttention.attention_count ?? summary.location_at_risk ?? 0, storageAttention.status === "critical" ? "critical" : storageAttention.attention_count ? "warn" : "")}
       </section>
-      <section class="card readiness-card">
-        <div class="toolbar"><h2>Readiness</h2><button type="button" class="secondary" data-open-tab="planning">Planning</button></div>
-        ${this._readinessPanel(readiness)}
-      </section>
-      <section class="card readiness-card">
-        <div class="toolbar"><h2>Suggested next actions</h2><button type="button" class="secondary" data-open-tab="planning">Planning</button></div>
-        ${this._suggestedActionsPanel(suggestedActions)}
-      </section>
+      ${this._dashboardActionContext(readiness, suggestedActions)}
       <section class="sections">
         <div class="stack">
           <section class="card">
@@ -682,6 +703,34 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       <div class="ops-card"><strong>Catalog size</strong><span>${this._safe(summary.foods ?? 0)} foods / ${this._safe(summary.recipes ?? 0)} recipes</span></div>
       <div class="ops-card"><strong class="${badHealth ? "warn" : "ok"}">Storage alerts: ${this._safe(badHealth)}</strong><span>${this._safe(storageAttention.unhealthy_locations_count ?? 0)} unhealthy locations</span></div>
       <div class="ops-card"><strong>Shopping: ${this._safe(shoppingProvider)}</strong><span>Products: ${this._safe(productTarget)} · Text: ${this._safe(textTarget)} · ${this._safe(minimumStock)}</span></div>
+    </section>`;
+  }
+
+  _dashboardActionContext(readiness = {}, suggestedActions = []) {
+    const context = [
+      `${suggestedActions.length} actions`,
+      `${readiness.ready?.length || 0} ready`,
+      `${readiness.missing?.length || 0} missing`,
+      `${readiness.location_at_risk?.length || 0} at risk`,
+    ].join(" · ");
+    return `<section class="card readiness-card">
+      <div class="toolbar">
+        <div>
+          <h2>Next actions</h2>
+          <p class="muted subline">${this._safe(context)}</p>
+        </div>
+        <button type="button" class="secondary" data-open-tab="planning">Open review</button>
+      </div>
+      <div class="action-context-grid">
+        <section class="action-context-panel">
+          <h3>Suggested next actions</h3>
+          ${this._suggestedActionsPanel(suggestedActions)}
+        </section>
+        <section class="action-context-panel">
+          <h3>Readiness</h3>
+          ${this._readinessPanel(readiness, true)}
+        </section>
+      </div>
     </section>`;
   }
 
@@ -996,18 +1045,49 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _suggestedActionRow(action) {
     const klass = action.status === "critical" ? "critical" : action.status === "ok" ? "ok" : action.status === "empty" ? "empty" : "warn";
     const payload = encodeURIComponent(JSON.stringify(action.payload || {}));
+    const sources = (action.sources || []).map((source) => `<span class="pill">${this._safe(source)}</span>`).join("");
+    const target = action.target ? `<p class="muted subline">Target: ${this._safe(action.target)}</p>` : "";
+    const lastQueued = action.last_queued ? `<p class="muted subline">Last queued: ${this._safe(this._shoppingLogSummary(action.last_queued))}</p>` : "";
     const button = action.service
-      ? `<button type="button" class="secondary" data-suggested-service="${this._safe(action.service)}" data-suggested-payload="${payload}" data-suggested-title="${this._safe(action.title)}">Run</button>`
+      ? `<button type="button" class="secondary" data-suggested-service="${this._safe(action.service)}" data-suggested-payload="${payload}" data-suggested-title="${this._safe(action.title)}">${this._safe(this._suggestedActionLabel(action))}</button>`
       : action.open_tab
-        ? `<button type="button" class="secondary" data-suggested-tab="${this._safe(action.open_tab)}">Review</button>`
+        ? `<button type="button" class="secondary" data-suggested-tab="${this._safe(action.open_tab)}">Open review</button>`
         : "";
     return `<div class="row">
       <div>
         <p class="name ${klass}">${this._safe(action.title)}</p>
         <p class="muted subline">Because ${this._safe(action.because || "existing Mise data points here.")}</p>
+        ${target}
+        ${lastQueued}
+        ${sources ? `<div class="actions">${sources}</div>` : ""}
       </div>
       <div class="actions">${button}</div>
     </div>`;
+  }
+
+  _shoppingLogSummary(log) {
+    const target = log.targets && Object.keys(log.targets).length
+      ? Object.entries(log.targets).map(([provider, count]) => `${provider}: ${count}`).join(", ")
+      : log.provider || "";
+    const count = log.item_count ? `${log.item_count} item${Number(log.item_count) === 1 ? "" : "s"}` : "";
+    return [count, target, log.message].filter(Boolean).join(" · ");
+  }
+
+  _suggestedActionLabel(action) {
+    const service = action.service || "";
+    if (service.includes("shopping")) {
+      return "Queue shopping";
+    }
+    if (service.includes("move")) {
+      return "Move container";
+    }
+    if (service.includes("metadata") || service.includes("update")) {
+      return "Save metadata";
+    }
+    if (service.includes("clear") || service.includes("archive")) {
+      return "Clear/archive";
+    }
+    return "Run action";
   }
 
   _readinessSection(label, items, compact) {
@@ -1031,17 +1111,29 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _storageAttentionSummary(storageAttention = {}) {
     const count = storageAttention.attention_count || 0;
     const status = storageAttention.status || "ok";
+    const label = storageAttention.status_label || this._storageStatusLabel(status, count);
     const parts = [
       `${storageAttention.containers_needing_location_count || 0} unassigned`,
+      `${storageAttention.critical_locations_count || 0} critical`,
+      `${storageAttention.warning_locations_count || 0} warning`,
       `${storageAttention.unhealthy_locations_count || 0} unhealthy locations`,
       `${storageAttention.prepared_inventory_at_risk_count || 0} prepared at risk`,
     ].join(" · ");
     return `<div class="row compact-row">
       <div>
-        <p class="name ${this._safe(status === "critical" ? "critical" : count ? "warn" : "ok")}">${count ? "Storage attention needed" : "Storage automation clear"}</p>
+        <p class="name ${this._safe(status === "critical" ? "critical" : count ? "warn" : "ok")}">${this._safe(label)}</p>
         <p class="muted subline">${this._safe(parts)}</p>
       </div>
     </div>`;
+  }
+
+  _storageStatusLabel(status, attentionCount = 0) {
+    if (status === "critical") return "Storage attention critical";
+    if (attentionCount) return "Storage attention needed";
+    if (status === "not_configured") return "Storage monitoring not configured";
+    if (status === "unavailable") return "Storage monitoring unavailable";
+    if (status === "unknown") return "Storage monitoring unavailable";
+    return "Storage automation clear";
   }
 
   _planningFilterBar(containers) {
@@ -1134,22 +1226,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
 
   _productAttentionSummaryRow(item) {
     const quantity = item.has_stock ? `${this._safe(item.quantity)} ${this._safe(item.unit)}` : "No stock";
-    return `<div class="row"><div><p class="name">${this._safe(item.label)}</p><p class="muted subline">${quantity} &middot; ${this._safe((item.reasons || []).join(", "))}</p></div><div class="qty warn">Review</div></div>`;
+    return this._summaryRow(item.label, [`${quantity} · ${(item.reasons || []).join(", ")}`], { quantity: "Review", klass: "warn" });
   }
 
   _containerRow(item, klass = "") {
     const details = [item.content_kind, item.item_label, item.location].filter(Boolean).join(" · ");
-    return `
-      <div class="row">
-        <div>
-          <p class="name">${this._safe(item.name)}</p>
-          <p class="muted subline">${this._safe(details)}</p>
-          ${item.format ? `<p class="muted subline">${this._safe(item.format)}</p>` : ""}
-          <span class="pill">${this._safe(item.tag_id || "no tag")}</span>
-        </div>
-        <div class="qty ${klass}">${this._safe(item.quantity)}<br><span class="muted">${this._safe(item.unit)}</span></div>
-      </div>
-    `;
+    return this._summaryRow(item.name, [details, item.format], { quantity: item.quantity, unit: item.unit, klass, pills: [item.tag_id || "no tag"] });
   }
 
   _inventoryContainerRow(container, locations) {
@@ -1161,12 +1243,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         ${dateLine ? `<p class="muted subline">${dateLine}</p>` : ""}
         <form class="container-actions" data-adjust-container="${this._safe(container.tag_id)}">
           <label>Quantity<input name="quantity" required type="number" min="0.000001" step="any" /></label>
-          <button type="submit" class="secondary" name="action" value="fill">Add</button>
-          <button type="submit" class="secondary" name="action" value="remove">Remove</button>
+          <button type="submit" class="secondary" name="action" value="fill">Add quantity</button>
+          <button type="submit" class="secondary" name="action" value="remove">Remove quantity</button>
         </form>
         <div class="actions">
-          <button type="button" class="secondary" data-clear-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}">Clear</button>
-          ${empty ? `<button type="button" class="secondary" data-archive-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}">Archive</button>` : ""}
+          <button type="button" class="secondary" data-clear-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}">Clear container</button>
+          ${empty ? `<button type="button" class="secondary" data-archive-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}">Archive container</button>` : ""}
           ${this._moveSelect(container, locations)}
         </div>
       </div>
@@ -1174,16 +1256,27 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _archivedContainerRow(container) {
-    return `<div class="row"><div><p class="name">${this._safe(container.name)}</p><p class="muted">${this._safe(container.item_label)} &middot; archived ${this._formatTime(container.archived_at)}</p><span class="pill">${this._safe(container.tag_id || "no tag")}</span></div><button type="button" class="secondary" data-restore-container="${this._safe(container.tag_id)}">Restore</button></div>`;
+    return this._summaryRow(
+      container.name,
+      [`${container.item_label || "Container"} · archived ${this._formatTime(container.archived_at)}`],
+      {
+        pills: [container.tag_id || "no tag"],
+        action: `<button type="button" class="secondary" data-restore-container="${this._safe(container.tag_id)}">Restore container</button>`,
+      },
+    );
   }
 
   _managedContainerRow(container, locations) {
-    return `<div class="row"><div><p class="name">${this._safe(container.name)}</p><p class="muted">${this._safe(container.item_label)} &middot; ${this._safe(container.location)}</p><p class="muted">${this._safe(container.quantity)} ${this._safe(container.unit)}</p></div><div>${this._moveSelect(container, locations)}</div></div>`;
+    return this._summaryRow(
+      container.name,
+      [container.item_label, container.location],
+      { quantity: container.quantity, unit: container.unit, action: this._moveSelect(container, locations) },
+    );
   }
 
   _moveSelect(container, locations) {
     const choices = locations.filter((location) => location.editable !== false).map((location) => `<option value="${this._safe(location.id)}">${this._safe(location.name)}</option>`).join("");
-    return `<select data-move-tag="${this._safe(container.tag_id)}"><option value="">Move to...</option>${choices}</select>`;
+    return `<select data-move-tag="${this._safe(container.tag_id)}"><option value="">Move container to...</option>${choices}</select>`;
   }
 
   _productAttentionRow(item) {
@@ -1261,15 +1354,34 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const proteins = Object.entries(entry.proteins || {}).map(([name, totals]) => `${name}: ${formatTotals(totals)}`).join(" · ");
     const recipes = Object.entries(entry.recipes || {}).map(([name, totals]) => `${name}: ${formatTotals(totals)}`).join(" · ");
     const quantities = Object.entries(entry.quantities || {}).map(([unit, amount]) => `${amount} ${unit}`).join(" + ");
-    return `<div class="row"><div><p class="name">${this._safe(entry.component)}</p><p class="muted subline">${this._safe(proteins || recipes)}</p></div><div class="qty">${this._safe(quantities)}</div></div>`;
+    return this._summaryRow(entry.component, [proteins || recipes], { quantity: quantities });
+  }
+
+  _summaryRow(title, detailLines = [], options = {}) {
+    const details = detailLines.filter(Boolean).map((line) => `<p class="muted subline">${this._safe(line)}</p>`).join("");
+    const pills = (options.pills || []).filter(Boolean).map((pill) => `<span class="pill">${this._safe(pill)}</span>`).join("");
+    const quantity = options.quantity !== undefined && options.quantity !== null && options.quantity !== ""
+      ? `<div class="qty ${this._safe(options.klass || "")}">${this._safe(options.quantity)}${options.unit ? `<br><span class="muted">${this._safe(options.unit)}</span>` : ""}</div>`
+      : "";
+    const action = options.action ? `<div class="actions">${options.action}</div>` : "";
+    const side = [quantity, action].filter(Boolean).join("");
+    return `<div class="row">
+      <div>
+        <p class="name">${this._safe(title)}</p>
+        ${details}
+        ${pills}
+      </div>
+      ${side ? `<div class="row-side">${side}</div>` : ""}
+    </div>`;
   }
 
   _locationCard(location) {
     const health = location.health || {};
     const readings = Object.entries(health.readings || {}).map(([role, reading]) => `<div class="reading"><strong>${this._safe(role.replaceAll("_", " "))}</strong><br>${this._safe(reading.state)}${reading.unit ? ` ${this._safe(reading.unit)}` : ""}</div>`).join("");
-    const problems = health.problems?.length ? health.problems.join(" · ") : health.status === "ok" ? "Everything looks normal" : "Monitoring is not configured";
+    const statusLabel = this._storageStatusLabel(health.status || "unknown", ["warning", "critical"].includes(health.status) ? 1 : 0);
+    const problems = health.problems?.length ? health.problems.join(" · ") : statusLabel;
     const deleteLabel = location.provider === "mocked" && location.local ? "Remove" : "Clear metadata";
-    return `<article class="card"><div class="toolbar"><div><h2>${this._safe(location.name)}</h2><p class="muted subline">${this._safe(location.location_type?.replaceAll("_", " ") || "location")}${location.area_name ? ` &middot; ${this._safe(location.area_name)}` : ""}</p></div>${location.editable !== false ? `<div class="actions"><button class="secondary" data-edit-location="${this._safe(location.id)}">Edit</button><button class="secondary" data-delete-location="${this._safe(location.id)}" data-location-name="${this._safe(location.name)}" data-location-provider="${this._safe(location.provider || "")}" data-location-local="${location.local ? "true" : "false"}">${deleteLabel}</button></div>` : ""}</div><p class="metric">${this._safe(location.containers)} <span class="muted">containers</span></p><p class="health ${this._safe(health.status || "")}">${this._safe(problems)}</p>${readings ? `<div class="reading-grid">${readings}</div>` : ""}</article>`;
+    return `<article class="card"><div class="toolbar"><div><h2>${this._safe(location.name)}</h2><p class="muted subline">${this._safe(location.location_type?.replaceAll("_", " ") || "location")}${location.area_name ? ` &middot; ${this._safe(location.area_name)}` : ""}</p></div>${location.editable !== false ? `<div class="actions"><button class="secondary" data-edit-location="${this._safe(location.id)}">Edit</button><button class="secondary" data-delete-location="${this._safe(location.id)}" data-location-name="${this._safe(location.name)}" data-location-provider="${this._safe(location.provider || "")}" data-location-local="${location.local ? "true" : "false"}">${deleteLabel}</button></div>` : ""}</div><p class="metric">${this._safe(location.containers)} <span class="muted">containers</span></p><p class="health ${this._safe(health.status || "")}">${this._safe(statusLabel)}</p><p class="muted subline">${this._safe(problems)}</p>${readings ? `<div class="reading-grid">${readings}</div>` : ""}</article>`;
   }
 
   _locationRow(location) {
@@ -1336,7 +1448,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _empty(message) {
-    return `<p class="muted">${this._safe(message)}</p>`;
+    return `<p class="state">${this._safe(message)}</p>`;
   }
 
   _emptyCard(message) {

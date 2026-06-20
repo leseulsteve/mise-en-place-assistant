@@ -48,6 +48,7 @@ from .const import (
     PRODUCT_CONTAINER_POLICIES,
     PRODUCT_MEAL_ROLES,
     PRODUCT_STORAGE_BEHAVIORS,
+    VOID_LOCATION_ID,
 )
 from .grocy import GrocyCatalogError
 from .kitchenowl import KitchenOwlError
@@ -85,6 +86,7 @@ ATTR_REQUEST_ID = "request_id"
 ATTR_SOURCE_PROVIDER = "source_provider"
 
 SCAN_MODES = ["set", "add", "remove"]
+DIAL_REQUEST_TIMEOUT = timedelta(seconds=30)
 
 
 def _nonnegative_number(value) -> int | float:
@@ -616,6 +618,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         CONF_M5DIAL_EVENT_SOURCE,
         entry.data.get(CONF_M5DIAL_EVENT_SOURCE, ""),
     )
+    active_dial_requests: dict[str, int] = {}
+    active_dial_request_timers = {}
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = manager
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -660,6 +664,62 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return int(event.data.get(ATTR_REQUEST_ID, 0) or 0)
         except (TypeError, ValueError):
             return 0
+
+    @callback
+    def _expire_dial_request(tag_id: str, request_id: int) -> None:
+        """Forget a Dial scan request that did not produce a timely save event."""
+        if active_dial_requests.get(tag_id) == request_id:
+            active_dial_requests.pop(tag_id, None)
+            active_dial_request_timers.pop(tag_id, None)
+            _LOGGER.debug(
+                "Expired M5Dial request: tag_id=%s request_id=%s",
+                tag_id,
+                request_id,
+            )
+
+    def _forget_dial_request(tag_id: str) -> None:
+        """Clear a tracked Dial request and cancel its expiry callback."""
+        active_dial_requests.pop(tag_id, None)
+        if timer := active_dial_request_timers.pop(tag_id, None):
+            timer.cancel()
+
+    def _remember_dial_request(tag_id: str, request_id: int) -> None:
+        """Track the active Dial scan nonce until it is saved, cancelled, or stale."""
+        if request_id <= 0:
+            _LOGGER.debug(
+                "Not tracking legacy M5Dial scan without a positive request_id: tag_id=%s request_id=%s",
+                tag_id,
+                request_id,
+            )
+            return
+        _forget_dial_request(tag_id)
+        active_dial_requests[tag_id] = request_id
+        active_dial_request_timers[tag_id] = hass.loop.call_later(
+            DIAL_REQUEST_TIMEOUT.total_seconds(),
+            _expire_dial_request,
+            tag_id,
+            request_id,
+        )
+
+    def _consume_dial_request(tag_id: str, request_id: int) -> bool:
+        """Return whether a save belongs to the active Dial scan, then consume it."""
+        if request_id <= 0 or active_dial_requests.get(tag_id) != request_id:
+            return False
+        _forget_dial_request(tag_id)
+        return True
+
+    def _dial_location_id(event) -> str | None:
+        """Return a selectable location id from the Dial event, if it is still valid."""
+        location_id = event.data.get(ATTR_LOCATION_ID)
+        if (
+            not location_id
+            or location_id == VOID_LOCATION_ID
+            or manager.location_for_id(location_id) is None
+        ):
+            return None
+        return location_id
+
+    entry.async_on_unload(lambda: [_forget_dial_request(tag_id) for tag_id in list(active_dial_requests)])
 
     def _dial_success_title(container: dict | None = None, item: dict | None = None) -> str:
         """Return a concise provider-aware Dial success title."""
@@ -778,6 +838,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Ignoring Mise en Place Assistant scan event without tag_id")
             return
         request_id = _event_request_id(event)
+        _remember_dial_request(tag_id, request_id)
         container = manager.get_container(tag_id)
         if container:
             _LOGGER.info("Known Mise en Place Assistant NFC tag scanned: tag_id=%s request_id=%s", tag_id, request_id)
@@ -796,6 +857,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Ignoring Mise en Place Assistant create event without tag_id")
             return
         request_id = _event_request_id(event)
+        if not _consume_dial_request(tag_id, request_id):
+            _LOGGER.warning(
+                "Ignoring stale M5Dial create event: tag_id=%s request_id=%s active_request_id=%s",
+                tag_id,
+                request_id,
+                active_dial_requests.get(tag_id),
+            )
+            hass.async_create_task(
+                show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    request_id=request_id,
+                    title="Scan expired",
+                    message="Scan again before saving",
+                )
+            )
+            return
         quantity = event.data.get(ATTR_QUANTITY, 0)
         try:
             quantity = float(quantity)
@@ -815,7 +893,56 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             )
             return
+        if not math.isfinite(quantity) or quantity < 0:
+            _LOGGER.debug(
+                "Invalid Mise en Place Assistant create quantity from M5Dial: tag_id=%s quantity=%s",
+                tag_id,
+                event.data.get(ATTR_QUANTITY),
+            )
+            hass.async_create_task(
+                show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    request_id=request_id,
+                    title="Bad quantity",
+                    message="Quantity must be finite and non-negative",
+                )
+            )
+            return
         content_kind = event.data.get(ATTR_CONTENT_KIND) or "ingredient"
+        if content_kind not in {"ingredient", "recipe", "meal"}:
+            _LOGGER.debug(
+                "Invalid Mise en Place Assistant create content kind from M5Dial: tag_id=%s content_kind=%s",
+                tag_id,
+                content_kind,
+            )
+            hass.async_create_task(
+                show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    request_id=request_id,
+                    title="Bad selection",
+                    message="Content kind unavailable",
+                )
+            )
+            return
+        location_id = _dial_location_id(event)
+        if location_id is None:
+            _LOGGER.debug(
+                "Invalid Mise en Place Assistant create location from M5Dial: tag_id=%s location_id=%s",
+                tag_id,
+                event.data.get(ATTR_LOCATION_ID),
+            )
+            hass.async_create_task(
+                show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    request_id=request_id,
+                    title="Bad location",
+                    message="Choose a real location",
+                )
+            )
+            return
         _LOGGER.info(
             "Creating Mise en Place Assistant container from M5Dial: tag_id=%s item_id=%s quantity=%s location=%s content_kind=%s provider=%s request_id=%s",
             tag_id,
@@ -833,14 +960,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     await manager.async_create_recipe_container(
                         tag_id=tag_id,
                         quantity=quantity,
-                        location_id=event.data.get(ATTR_LOCATION_ID),
+                        location_id=location_id,
                         recipe_id=item["id"],
                         content_kind=content_kind,
                     )
                 else:
                     item = await manager.async_catalog_item(event.data.get(ATTR_ITEM_ID, ""))
                     await manager.async_create_container(
-                        tag_id=tag_id, quantity=quantity, location_id=event.data.get(ATTR_LOCATION_ID),
+                        tag_id=tag_id, quantity=quantity, location_id=location_id,
                         unit=item["unit"], item_id=item["id"],
                         item_label=item["label"], item_format=item["format"],
                         source_provider=item.get("provider", manager.catalog_provider()),
@@ -884,6 +1011,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.debug("Ignoring Mise en Place Assistant update event without tag_id")
             return
         request_id = _event_request_id(event)
+        if not _consume_dial_request(tag_id, request_id):
+            _LOGGER.warning(
+                "Ignoring stale M5Dial update event: tag_id=%s request_id=%s active_request_id=%s",
+                tag_id,
+                request_id,
+                active_dial_requests.get(tag_id),
+            )
+            hass.async_create_task(
+                show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    request_id=request_id,
+                    title="Scan expired",
+                    message="Scan again before saving",
+                )
+            )
+            return
         quantity = event.data.get(ATTR_QUANTITY)
         try:
             quantity = float(quantity)
@@ -903,6 +1047,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             )
             return
+        if not math.isfinite(quantity) or quantity < 0:
+            _LOGGER.debug(
+                "Ignoring Mise en Place Assistant update with invalid quantity: tag_id=%s quantity=%s",
+                tag_id,
+                event.data.get(ATTR_QUANTITY),
+            )
+            hass.async_create_task(
+                show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    request_id=request_id,
+                    title="Bad quantity",
+                    message="Quantity must be finite and non-negative",
+                )
+            )
+            return
+        location_id = _dial_location_id(event)
+        if location_id is None:
+            _LOGGER.debug(
+                "Invalid Mise en Place Assistant update location from M5Dial: tag_id=%s location_id=%s",
+                tag_id,
+                event.data.get(ATTR_LOCATION_ID),
+            )
+            hass.async_create_task(
+                show_dial_operation_result(
+                    tag_id,
+                    success=False,
+                    request_id=request_id,
+                    title="Bad location",
+                    message="Choose a real location",
+                )
+            )
+            return
         _LOGGER.info(
             "Updating Mise en Place Assistant container from M5Dial: tag_id=%s quantity=%s location=%s request_id=%s",
             tag_id,
@@ -916,7 +1093,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 await manager.async_update_container(
                     tag_id=tag_id,
                     quantity=quantity,
-                    location_id=event.data.get(ATTR_LOCATION_ID),
+                    location_id=location_id,
                 )
             except (KeyError, ValueError) as err:
                 _LOGGER.warning("Could not update M5Dial container for tag_id=%s: %s", tag_id, err)

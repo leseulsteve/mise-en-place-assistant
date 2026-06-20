@@ -880,6 +880,24 @@ class MiseEnPlaceAssistantInventory:
             for location in locations
             if health_by_id.get(location.get("id"), {}).get("status") in {"warning", "critical"}
         ]
+        critical_locations = [
+            {
+                "location_id": location["location_id"],
+                "name": location.get("name"),
+                "problems": location.get("problems", []),
+            }
+            for location in unhealthy_locations
+            if location.get("status") == "critical"
+        ]
+        warning_locations = [
+            {
+                "location_id": location["location_id"],
+                "name": location.get("name"),
+                "problems": location.get("problems", []),
+            }
+            for location in unhealthy_locations
+            if location.get("status") == "warning"
+        ]
         unhealthy_ids = {location["location_id"] for location in unhealthy_locations}
         prepared_inventory_at_risk = [
             {
@@ -907,14 +925,28 @@ class MiseEnPlaceAssistantInventory:
         status = "critical" if worst_location == "critical" else "warning" if attention_count else "ok"
         return {
             "status": status,
+            "status_label": self._storage_status_label(status, attention_count),
             "attention_count": attention_count,
             "containers_needing_location_count": len(containers_needing_location),
             "unhealthy_locations_count": len(unhealthy_locations),
+            "critical_locations_count": len(critical_locations),
+            "warning_locations_count": len(warning_locations),
             "prepared_inventory_at_risk_count": len(prepared_inventory_at_risk),
             "containers_needing_location": containers_needing_location[:12],
             "unhealthy_locations": unhealthy_locations[:12],
+            "critical_locations": critical_locations[:12],
+            "warning_locations": warning_locations[:12],
             "prepared_inventory_at_risk": prepared_inventory_at_risk[:12],
         }
+
+    @staticmethod
+    def _storage_status_label(status: str, attention_count: int) -> str:
+        """Return the shared storage attention phrase used by sensors and panel."""
+        if status == "critical":
+            return "Storage attention critical"
+        if attention_count:
+            return "Storage attention needed"
+        return "Storage automation clear"
 
     def resolve_location(self, location: str | None = None, location_id: str | None = None) -> dict[str, Any]:
         """Resolve a Grocy-owned user-selected location without allowing The Void as input."""

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -19,7 +20,12 @@ SECRET_PATTERN = re.compile(
 )
 
 
-def run(command: list[str], *, capture: bool = False) -> subprocess.CompletedProcess:
+def run(
+    command: list[str],
+    *,
+    capture: bool = False,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess:
     """Run a command from the repository root."""
     print("+ " + " ".join(command))
     return subprocess.run(
@@ -28,6 +34,7 @@ def run(command: list[str], *, capture: bool = False) -> subprocess.CompletedPro
         check=True,
         text=True,
         capture_output=capture,
+        env={**os.environ, **(env or {})},
     )
 
 
@@ -67,6 +74,7 @@ def scan_staged_content() -> None:
 
 def validate_files() -> None:
     """Run lightweight local validation."""
+    run(["python3", "scripts/validate_mocked_catalog.py"])
     run(
         [
             "python3",
@@ -74,7 +82,8 @@ def validate_files() -> None:
             "compileall",
             "custom_components/mise_en_place_assistant",
             "scripts",
-        ]
+        ],
+        env={"PYTHONPYCACHEPREFIX": "/private/tmp/mise-en-place-publish-pycache"},
     )
     for filename in ("hacs.json", "custom_components/mise_en_place_assistant/manifest.json"):
         json.loads((ROOT / filename).read_text(encoding="utf-8"))

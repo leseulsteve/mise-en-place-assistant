@@ -511,6 +511,11 @@ binary_sensor:
     filters:
       - delayed_on_off: 10ms
 
+    # Physical UX contract:
+    # - Short press advances exactly one step on the current screen.
+    # - Long press opens the lightweight Mise listening view and clears any
+    #   active request so stale Home Assistant replies cannot save inventory.
+    # - The side Hold Button below is the always-available cancel/idle escape.
     on_multi_click:
       - timing:
           - ON for at most 599ms
@@ -534,6 +539,8 @@ binary_sensor:
     filters:
       - delayed_on_off: 10ms
     on_press:
+      # Hardware escape hatch: cancel the transient Dial flow, return to idle,
+      # and leave durable inventory decisions in Home Assistant.
       - script.execute: cancel_flow
 
 sensor:
@@ -904,7 +911,7 @@ script:
 
   - id: sound_attention
     then:
-      - rtttl.play: "attention:d=16,o=5,b=120:8c5,8g4"
+      - rtttl.play: "attention:d=16,o=5,b=120:8e5,8c5"
 
   - id: cancel_flow
     then:
@@ -1188,7 +1195,7 @@ script:
 
       - if:
           condition:
-            lambda: 'return id(press_view) == 21 && !id(last_tag_id).empty();'
+            lambda: 'return id(press_view) == 21 && !id(last_tag_id).empty() && !id(selected_location_id).empty();'
           then:
             - lambda: |-
                 ESP_LOGI("mise_en_place_assistant", "Updating container: tag=%s qty=%g location=%s", id(last_tag_id).c_str(), id(inventory_qty), id(selected_location_label).c_str());
@@ -1204,6 +1211,18 @@ script:
                   location: !lambda 'return id(selected_location_label);'
                   request_id: !lambda 'return std::to_string(id(active_request_id));'
                   source: "${device_name}"
+
+      - if:
+          condition:
+            lambda: 'return id(press_view) == 21 && (id(last_tag_id).empty() || id(selected_location_id).empty());'
+          then:
+            - lambda: |-
+                ESP_LOGW("mise_en_place_assistant", "Cannot update container with incomplete selection: tag=%s location_id=%s", id(last_tag_id).c_str(), id(selected_location_id).c_str());
+                id(result_title) = "Selection missing";
+                id(error_message) = "Location unavailable";
+                id(current_view) = 31;
+            - script.execute: sound_attention
+            - script.execute: show_page
 
       - if:
           condition:
@@ -1448,7 +1467,7 @@ lvgl:
         - label:
             align: CENTER
             y: 34
-            text: "Talking to Home Assistant"
+            text: "Thinking with Home Assistant"
             text_color: 0xB8AEB8
 
     - id: page_create_item
@@ -1663,9 +1682,14 @@ lvgl:
             border_width: 0
         - label:
             align: BOTTOM_MID
-            y: -28
+            y: -42
             text: "MISE"
             text_color: 0xFFF8EA
+        - label:
+            align: BOTTOM_MID
+            y: -18
+            text: "Press to exit"
+            text_color: 0x655C66
 
     - id: page_done
       bg_color: 0x000000
@@ -1699,7 +1723,7 @@ lvgl:
         - label:
             align: CENTER
             y: 8
-            text: "Putting your pantry in order"
+            text: "Checking with Home Assistant"
             text_color: 0xFFF8EA
         - label:
             align: CENTER

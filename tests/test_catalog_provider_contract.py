@@ -1,6 +1,7 @@
 """Regression checks for the selectable food-catalog boundary."""
 
 from pathlib import Path
+import subprocess
 import unittest
 
 
@@ -72,6 +73,17 @@ class TestCatalogProviderContract(unittest.TestCase):
         self.assertIn('"quantity": 750.5', MOCKED_SOURCE)
         self.assertIn('"mocked:bananas"', STORE_SOURCE)
         self.assertIn('"no_container"', STORE_SOURCE)
+
+    def test_mocked_catalog_is_release_safe(self) -> None:
+        result = subprocess.run(
+            ["python3", "scripts/validate_mocked_catalog.py"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        self.assertIn("mocked catalog ok", result.stdout)
+        self.assertIn('run(["python3", "scripts/validate_mocked_catalog.py"])', (ROOT / "scripts/publish_integration.py").read_text())
 
     def test_grocy_products_sync_to_mealie_from_review_metadata(self) -> None:
         self.assertNotIn("SERVICE_SYNC_GROCY_PRODUCTS_TO_MEALIE", CONST_SOURCE)

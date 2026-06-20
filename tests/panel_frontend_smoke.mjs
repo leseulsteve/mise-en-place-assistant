@@ -133,6 +133,16 @@ panel.hass = {
       service: "add_empty_containers_to_shopping_list",
       payload: {},
       open_tab: "",
+      sources: ["Mise container"],
+      target: "Grocy shopping list for Grocy products; KitchenOwl shopping list fallback",
+      last_queued: {
+        action: "Empty containers queued",
+        message: "1 empty-container refill item was sent to shopping providers.",
+        provider: "auto",
+        targets: { grocy: 1 },
+        item_count: 1,
+        reason: "empty_container_refill",
+      },
     }],
     shopping: {
       provider: "auto",
@@ -145,12 +155,17 @@ panel.hass = {
     operations: { catalog_providers: ["mocked"], health: { ok: 1 }, attention_total: 0 },
     storage_attention: {
       status: "warning",
+      status_label: "Storage attention needed",
       attention_count: 1,
       containers_needing_location_count: 0,
       unhealthy_locations_count: 1,
+      critical_locations_count: 0,
+      warning_locations_count: 1,
       prepared_inventory_at_risk_count: 0,
       containers_needing_location: [],
       unhealthy_locations: [{ location_id: "fridge", name: "Fridge", status: "warning", problems: ["temperature above range"] }],
+      critical_locations: [],
+      warning_locations: [{ location_id: "fridge", name: "Fridge", problems: ["temperature above range"] }],
       prepared_inventory_at_risk: [],
     },
     empty_containers: [],
@@ -173,9 +188,14 @@ await new Promise((resolve) => setImmediate(resolve));
 
 assert.match(panel.shadowRoot.innerHTML, /Mise en Place Assistant/);
 assert.match(panel.shadowRoot.innerHTML, /Active containers/);
+assert.match(panel.shadowRoot.innerHTML, /Next actions/);
 assert.match(panel.shadowRoot.innerHTML, /Readiness/);
 assert.match(panel.shadowRoot.innerHTML, /Suggested next actions/);
 assert.match(panel.shadowRoot.innerHTML, /Queue empty containers/);
+assert.match(panel.shadowRoot.innerHTML, /Queue shopping/);
+assert.match(panel.shadowRoot.innerHTML, /Mise container/);
+assert.match(panel.shadowRoot.innerHTML, /Target: Grocy shopping list/);
+assert.match(panel.shadowRoot.innerHTML, /Last queued: 1 item/);
 assert.match(panel.shadowRoot.innerHTML, /Storage attention needed/);
 panel._tab = "inventory";
 panel._render();

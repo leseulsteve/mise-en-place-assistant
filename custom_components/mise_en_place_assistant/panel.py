@@ -231,6 +231,7 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
         readiness=readiness,
         shopping=shopping_status,
         storage_attention=storage_attention,
+        logbook=manager.logbook,
     )
 
     return {
@@ -485,20 +486,25 @@ def _suggested_actions_data(
     readiness: dict[str, Any],
     shopping: dict[str, Any],
     storage_attention: dict[str, Any],
+    logbook: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Return explainable next actions backed by existing services or views."""
     actions: list[dict[str, Any]] = []
     today = date.today()
     soon = today + timedelta(days=3)
     if empty_containers:
+        empty_names = _sample_names(empty_containers, "name", fallback="empty container")
         actions.append(
             _suggested_action(
                 "queue_empty_containers",
                 "Queue empty containers",
-                f"{len(empty_containers)} empty container{'s' if len(empty_containers) != 1 else ''} can become a shopping request.",
+                f"{empty_names} {'is' if len(empty_containers) == 1 else 'are'} empty and can become a shopping request.",
                 service="add_empty_containers_to_shopping_list",
                 payload={},
                 status="warning",
+                sources=["Mise container"],
+                target=_shopping_target_summary(shopping, "empty_containers"),
+                last_queued=_latest_shopping_log(logbook, reason="empty_container_refill"),
             )
         )
     if shopping.get("grocy_minimum_stock"):
@@ -506,10 +512,13 @@ def _suggested_actions_data(
             _suggested_action(
                 "queue_grocy_minimum_stock",
                 "Queue Grocy minimum stock",
-                "Grocy already owns below-minimum-stock policy; Mise can ask Grocy to queue it.",
+                _minimum_stock_reason(readiness),
                 service="add_missing_products_to_shopping_list",
                 payload={},
                 status="warning" if readiness.get("missing") else "ok",
+                sources=["Grocy stock"],
+                target="Grocy minimum stock",
+                last_queued=_latest_shopping_log(logbook, reason="grocy_minimum_stock"),
             )
         )
     for item in product_attention:
@@ -519,7 +528,7 @@ def _suggested_actions_data(
             _suggested_action(
                 f"queue_product_{item.get('item_id')}",
                 f"Queue {item.get('label') or 'missing product'}",
-                ", ".join(item.get("reasons") or ["Product needs prep or shopping"]),
+                _product_attention_reason(item),
                 service="add_to_shopping_list",
                 payload={
                     "item_id": item.get("item_id"),
@@ -527,6 +536,9 @@ def _suggested_actions_data(
                     "description": "Queued from Mise suggested actions; reason=missing_prep_item",
                 },
                 status="warning",
+                sources=["Grocy stock", "Mealie recipe"],
+                target=_shopping_target_label(shopping.get("product_backed_target")),
+                last_queued=_latest_shopping_log(logbook, reason="explicit_shopping_request", label=item.get("label")),
             )
         )
         if len(actions) >= 5:
@@ -541,7 +553,7 @@ def _suggested_actions_data(
             _suggested_action(
                 f"queue_recipe_{container.get('tag_id')}",
                 f"Queue {label}",
-                "This prepared recipe container is empty, so queue a refill or prep reminder.",
+                f"{container.get('name') or container.get('tag_id') or label} is an empty {container.get('content_kind') or 'recipe'} container for {label}.",
                 service="add_to_shopping_list",
                 payload={
                     "name": label,
@@ -549,6 +561,9 @@ def _suggested_actions_data(
                     "description": f"Queued from empty Mise recipe container {container.get('name') or container.get('tag_id')}; reason=zero_recipe_container",
                 },
                 status="empty",
+                sources=["Mise container", "Mealie recipe"],
+                target=_shopping_target_label(shopping.get("free_text_target")),
+                last_queued=_latest_shopping_log(logbook, reason="explicit_shopping_request", label=label),
             )
         )
         if len(actions) >= 7:
@@ -569,9 +584,10 @@ def _suggested_actions_data(
             _suggested_action(
                 "review_freshness",
                 "Review freshness",
-                f"{len(stale)} stale, {len(expiring)} expiring soon, {len(opened)} opened without a best-before date.",
+                _freshness_reason(stale, expiring, opened),
                 open_tab="inventory",
                 status="warning",
+                sources=["Mise container"],
             )
         )
     if storage_attention.get("attention_count"):
@@ -579,16 +595,13 @@ def _suggested_actions_data(
             _suggested_action(
                 "review_storage_safety",
                 "Review storage safety",
-                (
-                    f"{storage_attention.get('containers_needing_location_count', 0)} unassigned, "
-                    f"{storage_attention.get('unhealthy_locations_count', 0)} unhealthy locations, "
-                    f"{storage_attention.get('prepared_inventory_at_risk_count', 0)} prepared at risk."
-                ),
+                _storage_attention_reason(storage_attention),
                 open_tab="storage",
                 status="critical" if storage_attention.get("status") == "critical" else "warning",
+                sources=["Location health", "Mise container"],
             )
         )
-    return actions[:8]
+    return sorted(actions, key=_suggested_action_sort_key)[:8]
 
 
 def _suggested_action(
@@ -600,6 +613,9 @@ def _suggested_action(
     service: str | None = None,
     payload: dict[str, Any] | None = None,
     open_tab: str | None = None,
+    sources: list[str] | None = None,
+    target: str | None = None,
+    last_queued: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one panel action with an explicit reason and existing target."""
     return {
@@ -610,7 +626,141 @@ def _suggested_action(
         "service": service or "",
         "payload": payload or {},
         "open_tab": open_tab or "",
+        "sources": sources or [],
+        "target": target or "",
+        "last_queued": last_queued or None,
     }
+
+
+def _shopping_target_label(provider: Any) -> str:
+    """Return the shopping target label shown before queueing."""
+    if provider == "kitchenowl":
+        return "KitchenOwl shopping list"
+    if provider == "grocy":
+        return "Grocy shopping list"
+    return "Configured shopping list"
+
+
+def _shopping_target_summary(shopping: dict[str, Any], action_kind: str) -> str:
+    """Explain the provider target used by a shopping action."""
+    product_target = _shopping_target_label(shopping.get("product_backed_target"))
+    text_target = _shopping_target_label(shopping.get("free_text_target"))
+    if action_kind == "empty_containers" and product_target != text_target:
+        return f"{product_target} for Grocy products; {text_target} fallback"
+    return product_target if action_kind == "empty_containers" else text_target
+
+
+def _latest_shopping_log(
+    logbook: list[dict[str, Any]],
+    *,
+    reason: str,
+    label: str | None = None,
+) -> dict[str, Any] | None:
+    """Return the newest matching shopping log entry for panel feedback."""
+    wanted = str(label or "").casefold()
+    for entry in reversed(logbook):
+        details = entry.get("details") or {}
+        if details.get("reason") != reason:
+            continue
+        labels = [str(value).casefold() for value in (details.get("labels") or []) if value]
+        if not labels and details.get("item"):
+            labels = [str(details.get("item")).casefold()]
+        item_labels = [
+            str(item.get("label")).casefold()
+            for item in details.get("items", []) or []
+            if isinstance(item, dict) and item.get("label")
+        ]
+        if wanted and labels and wanted not in labels and wanted not in item_labels:
+            continue
+        return {
+            "action": entry.get("action"),
+            "message": entry.get("message"),
+            "created_at": entry.get("created_at"),
+            "provider": details.get("provider"),
+            "targets": details.get("targets", {}),
+            "item_count": details.get("item_count"),
+            "reason": reason,
+        }
+    return None
+
+
+def _sample_names(rows: list[dict[str, Any]], key: str, *, fallback: str) -> str:
+    """Return a compact human-readable sample from existing overview rows."""
+    names = [str(row.get(key) or "").strip() for row in rows]
+    names = [name for name in names if name]
+    if not names:
+        names = [fallback]
+    sample = ", ".join(names[:2])
+    remaining = len(rows) - len(names[:2])
+    return f"{sample} + {remaining} more" if remaining > 0 else sample
+
+
+def _minimum_stock_reason(readiness: dict[str, Any]) -> str:
+    """Explain Grocy minimum-stock queueing using current missing rows."""
+    missing = readiness.get("missing") or []
+    if missing:
+        return f"Grocy owns below-minimum-stock policy, and {missing[0].get('label') or 'one product'} currently needs review."
+    return "Grocy owns below-minimum-stock policy, and Mise can ask Grocy to queue anything below par."
+
+
+def _product_attention_reason(item: dict[str, Any]) -> str:
+    """Explain a product queue recommendation with the product and review reason."""
+    reasons = ", ".join(item.get("reasons") or ["Product needs prep or shopping"])
+    return f"{item.get('label') or 'This product'} has no stock because {reasons}."
+
+
+def _freshness_reason(
+    stale: list[dict[str, Any]],
+    expiring: list[dict[str, Any]],
+    opened: list[dict[str, Any]],
+) -> str:
+    """Explain freshness review with specific dates and containers."""
+    parts: list[str] = []
+    if stale:
+        first = stale[0]
+        parts.append(f"{first.get('label') or 'one container'} is stale since {first.get('detail') or 'its stored date'}")
+    if expiring:
+        first = expiring[0]
+        parts.append(f"{first.get('name') or 'one container'} expires {first.get('best_before_date')}")
+    if opened:
+        first = opened[0]
+        parts.append(f"{first.get('name') or 'one container'} was opened {first.get('opened_date')} without a best-before date")
+    return "; ".join(parts) + "."
+
+
+def _storage_attention_reason(storage_attention: dict[str, Any]) -> str:
+    """Explain storage review with the exact location or container type at risk."""
+    locations = storage_attention.get("unhealthy_locations") or []
+    unassigned = storage_attention.get("containers_needing_location") or []
+    prepared = storage_attention.get("prepared_inventory_at_risk") or []
+    parts: list[str] = []
+    if locations:
+        first = locations[0]
+        problems = ", ".join(first.get("problems") or [first.get("status") or "needs attention"])
+        parts.append(f"{first.get('name') or 'one location'} reports {problems}")
+    if unassigned:
+        parts.append(f"{_sample_names(unassigned, 'name', fallback='one container')} needs a location")
+    if prepared:
+        parts.append(f"{_sample_names(prepared, 'name', fallback='prepared inventory')} is stored in an unhealthy location")
+    if not parts:
+        parts.append("storage attention attributes report an issue")
+    return "; ".join(parts) + "."
+
+
+def _suggested_action_sort_key(action: dict[str, Any]) -> tuple[int, str]:
+    """Keep safety and review work above lower-risk shopping prompts."""
+    action_id = str(action.get("id") or "")
+    if "storage_safety" in action_id:
+        return (0, action_id)
+    if "freshness" in action_id:
+        return (1, action_id)
+    if action.get("status") == "critical":
+        return (2, action_id)
+    if action.get("status") in {"warning", "empty"} and action.get("open_tab"):
+        return (3, action_id)
+    if action.get("status") in {"warning", "empty"}:
+        return (4, action_id)
+    return (5, action_id)
 
 
 def _date_in_range(value: Any, start: date, end: date) -> bool:

@@ -140,12 +140,17 @@ class MiseEnPlaceAssistantStorageAttentionSensor(MiseEnPlaceAssistantBaseSensor)
     def extra_state_attributes(self) -> dict[str, Any]:
         summary = self.summary
         return {
+            "status_label": summary["status_label"],
             "attention_count": summary["attention_count"],
             "containers_needing_location_count": summary["containers_needing_location_count"],
             "unhealthy_locations_count": summary["unhealthy_locations_count"],
+            "critical_locations_count": summary["critical_locations_count"],
+            "warning_locations_count": summary["warning_locations_count"],
             "prepared_inventory_at_risk_count": summary["prepared_inventory_at_risk_count"],
             "containers_needing_location": summary["containers_needing_location"],
             "unhealthy_locations": summary["unhealthy_locations"],
+            "critical_locations": summary["critical_locations"],
+            "warning_locations": summary["warning_locations"],
             "prepared_inventory_at_risk": summary["prepared_inventory_at_risk"],
         }
 
