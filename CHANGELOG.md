@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.6 - 2026-06-19
+
+- Add selectable Mocked/Mealie food catalogs, catalog-backed writes, and verified Dial save acknowledgements—because celebrating a Saved event before Home Assistant saved anything was apparently performance art.
+
 ## 0.0.5 - 2026-06-19
 
 - Register the sidebar through Home Assistant’s custom-panel API and add panel-path diagnostics, because a blank page was apparently too subtle a debugging interface.
