@@ -70,12 +70,6 @@ def _mealie_url(value: str) -> str:
         raise vol.Invalid(str(err)) from err
 
 
-def _optional_mealie_url(value: str) -> str:
-    """Allow unused credentials when Mealie is not one of the selected providers."""
-    value = str(value).strip()
-    return _mealie_url(value) if value else ""
-
-
 def _grocy_url(value: str) -> str:
     """Validate the required Grocy base URL."""
     value = str(value).strip()
@@ -87,12 +81,6 @@ def _grocy_url(value: str) -> str:
         raise vol.Invalid(str(err)) from err
 
 
-def _optional_grocy_url(value: str) -> str:
-    """Allow unused credentials when Grocy is not one of the selected providers."""
-    value = str(value).strip()
-    return _grocy_url(value) if value else ""
-
-
 def _kitchenowl_url(value: str) -> str:
     """Validate the required KitchenOwl base URL."""
     value = str(value).strip()
@@ -102,12 +90,6 @@ def _kitchenowl_url(value: str) -> str:
         return validate_kitchenowl_url(value)
     except ValueError as err:
         raise vol.Invalid(str(err)) from err
-
-
-def _optional_kitchenowl_url(value: str) -> str:
-    """Allow unused credentials only when DEV mode uses mock data."""
-    value = str(value).strip()
-    return _kitchenowl_url(value) if value else ""
 
 
 def _positive_int(value) -> int:
@@ -202,6 +184,11 @@ def _optional_kitchenowl_list_field(default: int | None = None):
     return vol.Optional(CONF_KITCHENOWL_SHOPPING_LIST_ID, **kwargs)
 
 
+def _kitchenowl_list_value(user_input: dict) -> int | None:
+    """Normalize the optional KitchenOwl shopping list id."""
+    return _optional_positive_int(user_input.get(CONF_KITCHENOWL_SHOPPING_LIST_ID))
+
+
 def _needs_mealie(providers: list[str]) -> bool:
     return PROVIDER_MEALIE in providers
 
@@ -256,7 +243,7 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 CONF_KITCHENOWL_URL: user_input.get(CONF_KITCHENOWL_URL, ""),
                 CONF_KITCHENOWL_TOKEN: user_input.get(CONF_KITCHENOWL_TOKEN, "").strip(),
-                CONF_KITCHENOWL_SHOPPING_LIST_ID: user_input.get(CONF_KITCHENOWL_SHOPPING_LIST_ID),
+                CONF_KITCHENOWL_SHOPPING_LIST_ID: _kitchenowl_list_value(user_input),
             }
             self._entry_data[CONF_CATALOG_PROVIDER] = providers[0] if providers else ""
             if _needs_mealie(self._entry_data[CONF_CATALOG_PROVIDERS]):
@@ -302,30 +289,43 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(
                     CONF_KITCHENOWL_URL,
                     default=(user_input or {}).get(CONF_KITCHENOWL_URL, ""),
-                ): _optional_kitchenowl_url,
+                ): str,
                 vol.Optional(
                     CONF_KITCHENOWL_TOKEN,
                     default=(user_input or {}).get(CONF_KITCHENOWL_TOKEN, ""),
                 ): str,
                 _optional_kitchenowl_list_field(
                     (user_input or {}).get(CONF_KITCHENOWL_SHOPPING_LIST_ID)
-                ): _optional_positive_int,
+                ): str,
             }
         )
 
     def _finish_or_continue_provider_setup(self):
         """Continue provider credential collection or create the entry."""
-        if _needs_grocy(self._entry_data[CONF_CATALOG_PROVIDERS]) and CONF_GROCY_URL not in self._entry_data:
+        if (
+            _needs_grocy(self._entry_data[CONF_CATALOG_PROVIDERS])
+            and CONF_GROCY_URL not in self._entry_data
+        ):
             return self.async_show_form(
                 step_id="grocy_manual",
-                data_schema=vol.Schema(
-                    {
-                        vol.Required(CONF_GROCY_URL): _grocy_url,
-                        vol.Required(CONF_GROCY_TOKEN): _required_text,
-                    }
-                ),
+                data_schema=self._grocy_schema(),
             )
         return self.async_create_entry(title=NAME, data=self._entry_data)
+
+    def _grocy_schema(self, user_input: dict | None = None) -> vol.Schema:
+        """Return the Grocy credential form schema."""
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_GROCY_URL,
+                    default=(user_input or {}).get(CONF_GROCY_URL, ""),
+                ): str,
+                vol.Required(
+                    CONF_GROCY_TOKEN,
+                    default=(user_input or {}).get(CONF_GROCY_TOKEN, ""),
+                ): str,
+            }
+        )
 
     async def async_step_mealie(self, user_input: dict | None = None):
         """Reuse a configured Home Assistant Mealie entry, if one exists."""
@@ -365,30 +365,58 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_mealie_manual(self, user_input: dict | None = None):
         """Collect credentials when no Home Assistant Mealie entry exists."""
         if user_input is not None:
+            try:
+                mealie_url = _mealie_url(user_input.get(CONF_MEALIE_URL, ""))
+                mealie_token = _required_text(user_input.get(CONF_MEALIE_TOKEN, ""))
+            except vol.Invalid:
+                return self.async_show_form(
+                    step_id="mealie_manual",
+                    data_schema=self._mealie_schema(user_input),
+                    errors={"base": "invalid_provider_connection"},
+                )
             self._entry_data.update(
                 {
-                    CONF_MEALIE_URL: user_input[CONF_MEALIE_URL],
-                    CONF_MEALIE_TOKEN: user_input[CONF_MEALIE_TOKEN],
+                    CONF_MEALIE_URL: mealie_url,
+                    CONF_MEALIE_TOKEN: mealie_token,
                 }
             )
             return self._finish_or_continue_provider_setup()
         return self.async_show_form(
             step_id="mealie_manual",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_MEALIE_URL): _mealie_url,
-                    vol.Required(CONF_MEALIE_TOKEN): _required_text,
-                }
-            ),
+            data_schema=self._mealie_schema(),
+        )
+
+    def _mealie_schema(self, user_input: dict | None = None) -> vol.Schema:
+        """Return the Mealie credential form schema."""
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_MEALIE_URL,
+                    default=(user_input or {}).get(CONF_MEALIE_URL, ""),
+                ): str,
+                vol.Required(
+                    CONF_MEALIE_TOKEN,
+                    default=(user_input or {}).get(CONF_MEALIE_TOKEN, ""),
+                ): str,
+            }
         )
 
     async def async_step_grocy_manual(self, user_input: dict | None = None):
         """Collect Grocy API credentials."""
         if user_input is not None:
+            try:
+                grocy_url = _grocy_url(user_input.get(CONF_GROCY_URL, ""))
+                grocy_token = _required_text(user_input.get(CONF_GROCY_TOKEN, ""))
+            except vol.Invalid:
+                return self.async_show_form(
+                    step_id="grocy_manual",
+                    data_schema=self._grocy_schema(user_input),
+                    errors={"base": "invalid_provider_connection"},
+                )
             self._entry_data.update(
                 {
-                    CONF_GROCY_URL: user_input[CONF_GROCY_URL],
-                    CONF_GROCY_TOKEN: user_input[CONF_GROCY_TOKEN],
+                    CONF_GROCY_URL: grocy_url,
+                    CONF_GROCY_TOKEN: grocy_token,
                 }
             )
             return self.async_create_entry(title=NAME, data=self._entry_data)
@@ -506,7 +534,7 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
                         ),
                         CONF_KITCHENOWL_URL: user_input.get(CONF_KITCHENOWL_URL, ""),
                         CONF_KITCHENOWL_TOKEN: user_input.get(CONF_KITCHENOWL_TOKEN, "").strip(),
-                        CONF_KITCHENOWL_SHOPPING_LIST_ID: user_input.get(CONF_KITCHENOWL_SHOPPING_LIST_ID),
+                        CONF_KITCHENOWL_SHOPPING_LIST_ID: _kitchenowl_list_value(user_input),
                         CONF_CATALOG_PROVIDERS: providers,
                         CONF_CATALOG_PROVIDER: providers[0] if providers else "",
                         CONF_DEV_MODE: dev_mode,
@@ -534,14 +562,14 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
                     ): str,
                     vol.Required(CONF_CATALOG_PROVIDERS, default=current_providers): _provider_selector(),
                     vol.Optional(CONF_DEV_MODE, default=current_dev_mode): selector.BooleanSelector(),
-                    vol.Optional(CONF_MEALIE_URL, default=current_mealie_url): _optional_mealie_url,
+                    vol.Optional(CONF_MEALIE_URL, default=current_mealie_url): str,
                     vol.Optional(CONF_MEALIE_TOKEN, default=current_mealie_token): str,
-                    vol.Optional(CONF_GROCY_URL, default=current_grocy_url): _optional_grocy_url,
+                    vol.Optional(CONF_GROCY_URL, default=current_grocy_url): str,
                     vol.Optional(CONF_GROCY_TOKEN, default=current_grocy_token): str,
                     vol.Optional(CONF_SHOPPING_LIST_PROVIDER, default=current_shopping_provider): _shopping_provider_selector(),
-                    vol.Optional(CONF_KITCHENOWL_URL, default=current_kitchenowl_url): _optional_kitchenowl_url,
+                    vol.Optional(CONF_KITCHENOWL_URL, default=current_kitchenowl_url): str,
                     vol.Optional(CONF_KITCHENOWL_TOKEN, default=current_kitchenowl_token): str,
-                    _optional_kitchenowl_list_field(current_kitchenowl_list_id): _optional_positive_int,
+                    _optional_kitchenowl_list_field(current_kitchenowl_list_id): str,
                 }
             ),
             errors=errors,

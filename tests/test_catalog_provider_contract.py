@@ -43,6 +43,15 @@ class TestCatalogProviderContract(unittest.TestCase):
         self.assertIn("async_get_entry(source_entry_id)", STORE_SOURCE)
         self.assertGreaterEqual(MOCKED_SOURCE.count('("'), 40)
 
+    def test_config_flow_forms_only_use_serializable_field_validators(self) -> None:
+        self.assertNotIn("): _mealie_url", FLOW_SOURCE)
+        self.assertNotIn("): _grocy_url", FLOW_SOURCE)
+        self.assertNotIn("): _kitchenowl_url", FLOW_SOURCE)
+        self.assertNotIn("): _optional_positive_int", FLOW_SOURCE)
+        self.assertIn("mealie_url = _mealie_url", FLOW_SOURCE)
+        self.assertIn("grocy_url = _grocy_url", FLOW_SOURCE)
+        self.assertIn("_validate_kitchenowl_config(user_input, dev_mode)", FLOW_SOURCE)
+
     def test_grocy_can_supply_products_without_replacing_mealie(self) -> None:
         self.assertIn("PROVIDER_GROCY", CONST_SOURCE)
         self.assertIn("GrocyCatalogClient", STORE_SOURCE)
