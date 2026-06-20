@@ -11,6 +11,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this._showLocation ??= false;
     this._editingLocation ??= "";
     this._selectedLocation ??= "";
+    this._createContainerLocation ??= "";
     this._containerContentKind ??= "ingredient";
     this._busyAction ??= "";
     this._planningFilter ??= "all";
@@ -166,6 +167,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           gap: 10px;
           margin-bottom: 18px;
         }
+        .ops-strip.triple { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         .ops-strip.compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .ops-card {
           border: 1px solid var(--divider-color);
@@ -180,6 +182,18 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           overflow-wrap: anywhere;
         }
         .ops-card span { display: block; margin-top: 3px; font-size: 12px; color: var(--secondary-text-color); }
+        .ops-card.critical {
+          border-color: rgba(244, 67, 54, 0.44);
+          background: rgba(244, 67, 54, 0.10);
+        }
+        .ops-card.warning {
+          border-color: rgba(255, 152, 0, 0.44);
+          background: rgba(255, 152, 0, 0.10);
+        }
+        .ops-card.ok {
+          border-color: rgba(67, 160, 71, 0.35);
+          background: rgba(67, 160, 71, 0.08);
+        }
         * { box-sizing: border-box; }
         main {
           width: min(1240px, 100%);
@@ -278,16 +292,16 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           box-shadow: var(--ha-card-box-shadow, none);
         }
         .location-card {
-          --card-accent: var(--location-accent, var(--primary-color));
           overflow: hidden;
           padding: 0;
-          background:
-            linear-gradient(135deg, color-mix(in srgb, var(--card-accent) 18%, transparent), transparent 36%),
-            var(--card-background-color);
+          background: var(--card-background-color);
+        }
+        .location-card:not(.selected) {
+          cursor: pointer;
         }
         .location-card.selected {
-          border-color: color-mix(in srgb, var(--card-accent) 58%, var(--divider-color));
-          box-shadow: 0 0 0 1px color-mix(in srgb, var(--card-accent) 34%, transparent);
+          border-color: var(--primary-color);
+          box-shadow: var(--ha-card-box-shadow, none);
         }
         .location-card-header {
           display: grid;
@@ -295,8 +309,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           gap: 12px;
           align-items: start;
           padding: 14px 15px 12px;
-          border-top: 5px solid var(--card-accent);
-          border-bottom: 1px solid color-mix(in srgb, var(--card-accent) 38%, var(--divider-color));
+          border-bottom: 1px solid var(--divider-color);
         }
         .location-card-title {
           display: flex;
@@ -305,7 +318,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           min-width: 0;
         }
         .location-card-title ha-icon {
-          color: var(--card-accent);
+          color: var(--primary-color);
           --mdc-icon-size: 22px;
           flex: 0 0 auto;
         }
@@ -321,21 +334,21 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           display: inline-flex;
           align-items: center;
           gap: 5px;
-          border: 1px solid color-mix(in srgb, var(--card-accent) 42%, var(--divider-color));
+          border: 1px solid var(--divider-color);
           border-radius: 999px;
-          background: color-mix(in srgb, var(--card-accent) 13%, transparent);
+          background: var(--secondary-background-color, rgba(128,128,128,.06));
           padding: 4px 8px;
           color: var(--secondary-text-color);
           font-size: 12px;
           font-weight: 700;
         }
-        .location-chip ha-icon { --mdc-icon-size: 15px; color: var(--card-accent); }
+        .location-chip ha-icon { --mdc-icon-size: 15px; color: var(--primary-color); }
         .location-card .location-type {
-          color: var(--card-accent);
+          color: var(--primary-text-color);
           font-weight: 800;
         }
         .selected-chip {
-          color: var(--card-accent);
+          color: var(--primary-color);
           font-weight: 800;
         }
         .location-card-actions {
@@ -354,9 +367,9 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           align-items: center;
           justify-content: center;
           border-radius: 999px;
-          border: 1px solid color-mix(in srgb, var(--card-accent, var(--primary-color)) 46%, var(--divider-color));
-          background: color-mix(in srgb, var(--card-accent, var(--primary-color)) 16%, transparent);
-          color: var(--card-accent, var(--primary-color));
+          border: 1px solid var(--divider-color);
+          background: var(--secondary-background-color, rgba(128,128,128,.06));
+          color: var(--primary-color);
           padding: 0;
         }
         .icon-button.danger {
@@ -370,7 +383,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           min-width: 82px;
         }
         .location-count strong {
-          color: var(--card-accent);
+          color: var(--primary-text-color);
           font-size: 24px;
           line-height: 1;
         }
@@ -380,29 +393,59 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           font-weight: 700;
         }
         .location-card-body { padding: 12px 15px 15px; }
-        .location-card.type-fridge { --location-accent: #039be5; }
-        .location-card.type-freezer { --location-accent: #5e97f6; }
-        .location-card.type-pantry { --location-accent: #7cb342; }
-        .location-card.type-dry_storage { --location-accent: #8d6e63; }
-        .location-card.type-cellar { --location-accent: #6d4c41; }
-        .location-card.type-counter { --location-accent: #f9a825; }
-        .location-card.type-other { --location-accent: var(--secondary-text-color); }
-        .container-card {
-          --card-accent: var(--container-accent, var(--primary-color));
-          border: 1px solid color-mix(in srgb, var(--card-accent) 34%, var(--divider-color));
+        .location-overview {
+          display: grid;
+          gap: 10px;
+          margin-bottom: 12px;
+        }
+        .location-facts {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 8px;
+        }
+        .location-fact {
+          border: 1px solid var(--divider-color);
           border-radius: 8px;
-          background:
-            linear-gradient(90deg, color-mix(in srgb, var(--card-accent) 16%, transparent), transparent 42%),
-            var(--card-background-color);
+          background: var(--secondary-background-color, rgba(128,128,128,.04));
+          padding: 9px 10px;
+          min-width: 0;
+        }
+        .location-fact span {
+          display: block;
+          color: var(--secondary-text-color);
+          font-size: 11px;
+          font-weight: 750;
+          text-transform: uppercase;
+        }
+        .location-fact strong {
+          display: block;
+          margin-top: 3px;
+          color: var(--primary-text-color);
+          font-size: 13px;
+          overflow-wrap: anywhere;
+        }
+        .location-problems {
+          display: flex;
+          align-items: flex-start;
+          gap: 7px;
+          border: 1px solid rgba(255, 152, 0, 0.38);
+          border-radius: 8px;
+          background: rgba(255, 152, 0, 0.10);
+          color: var(--primary-text-color);
+          padding: 9px 10px;
+          font-size: 13px;
+          font-weight: 650;
+        }
+        .location-problems ha-icon { --mdc-icon-size: 18px; color: var(--warning-color, #ff9800); }
+        .container-card {
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          background: var(--card-background-color);
           padding: 10px 11px;
         }
-        .container-card.row { border-top: 1px solid color-mix(in srgb, var(--card-accent) 34%, var(--divider-color)); }
+        .container-card.row { border-top: 1px solid var(--divider-color); }
         .container-card + .container-card { margin-top: 8px; }
         .container-card .row-side { align-self: stretch; align-content: space-between; }
-        .container-card.kind-ingredient { --container-accent: #2e7d32; }
-        .container-card.kind-recipe { --container-accent: #8e24aa; }
-        .container-card.kind-meal { --container-accent: #ef6c00; }
-        .container-card.kind-empty { --container-accent: var(--secondary-text-color); }
         .container-titleline {
           display: flex;
           align-items: center;
@@ -410,7 +453,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           min-width: 0;
         }
         .container-titleline > ha-icon {
-          color: var(--card-accent);
+          color: var(--primary-color);
           --mdc-icon-size: 22px;
           flex: 0 0 auto;
         }
@@ -435,19 +478,15 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           display: inline-flex;
           align-items: center;
           gap: 5px;
-          border: 1px solid color-mix(in srgb, var(--card-accent, var(--primary-color)) 38%, var(--divider-color));
+          border: 1px solid var(--divider-color);
           border-radius: 999px;
-          background: color-mix(in srgb, var(--card-accent, var(--primary-color)) 12%, transparent);
+          background: var(--secondary-background-color, rgba(128,128,128,.06));
           padding: 3px 8px;
           color: var(--secondary-text-color);
           font-size: 12px;
           font-weight: 700;
         }
         .container-chip ha-icon { --mdc-icon-size: 15px; }
-        .container-chip.kind-ingredient,
-        .container-chip.kind-recipe,
-        .container-chip.kind-meal,
-        .container-chip.kind-empty { color: var(--card-accent); }
         .container-chip.place ha-icon { color: var(--primary-color); }
         .container-actions-line {
           display: flex;
@@ -461,6 +500,34 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           min-width: 158px;
           max-width: 230px;
           padding: 7px 28px 7px 9px;
+        }
+        .icon-select {
+          position: relative;
+          width: 34px;
+          min-width: 34px;
+          height: 34px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid var(--divider-color);
+          border-radius: 999px;
+          background: var(--secondary-background-color, rgba(128,128,128,.06));
+          color: var(--primary-color);
+          overflow: hidden;
+        }
+        .icon-select ha-icon {
+          --mdc-icon-size: 18px;
+          pointer-events: none;
+        }
+        .icon-select select {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          min-width: 0;
+          max-width: none;
+          height: 100%;
+          opacity: 0;
+          cursor: pointer;
         }
         .attention-chip {
           display: inline-flex;
@@ -600,9 +667,9 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         }
         .health { margin-top: 9px; font-weight: 650; }
         .monitoring-panel {
-          border: 1px solid color-mix(in srgb, var(--location-accent, var(--divider-color)) 28%, var(--divider-color));
+          border: 1px solid var(--divider-color);
           border-radius: 8px;
-          background: color-mix(in srgb, var(--location-accent, var(--primary-color)) 7%, transparent);
+          background: var(--secondary-background-color, rgba(128,128,128,.04));
           padding: 10px;
           margin-bottom: 12px;
         }
@@ -623,11 +690,16 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           padding: 9px 10px 2px;
         }
         .content-group h3 {
-          color: var(--location-accent, var(--secondary-text-color));
+          color: var(--secondary-text-color);
           font-size: 13px;
           font-weight: 750;
           margin-bottom: 0;
+          display: flex;
+          justify-content: space-between;
+          gap: 8px;
+          align-items: center;
         }
+        .content-count { color: var(--secondary-text-color); font-size: 11px; font-weight: 700; }
         .content-group .row:first-of-type { border-top: 0; }
         .location {
           display: flex;
@@ -670,6 +742,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           .location-card-header { grid-template-columns: 1fr; }
           .location-count { justify-items: start; }
           .location-card-actions { justify-content: flex-start; }
+          .location-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           .row { grid-template-columns: 1fr; }
           .row-side { justify-items: start; }
           .qty { text-align: left; }
@@ -697,17 +770,37 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => { this._tab = button.dataset.tab; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-open-tab]").forEach((button) => button.addEventListener("click", () => { this._tab = button.dataset.openTab; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-planning-filter]").forEach((button) => button.addEventListener("click", () => { this._planningFilter = button.dataset.planningFilter; this._render(); }));
-    this.shadowRoot.getElementById("add-container")?.addEventListener("click", () => { if (this._isBusy()) return; this._tab = "storage"; this._showCreate = !this._showCreate; this._render(); });
     this.shadowRoot.getElementById("add-location")?.addEventListener("click", () => { if (this._isBusy()) return; this._editingLocation = ""; this._showLocation = !this._showLocation; this._render(); });
     this.shadowRoot.getElementById("create-form")?.addEventListener("submit", (event) => this._createContainer(event));
     this.shadowRoot.getElementById("container-content-kind")?.addEventListener("change", (event) => { this._containerContentKind = event.currentTarget.value; this._render(); });
     this.shadowRoot.getElementById("location-form")?.addEventListener("submit", (event) => this._createLocation(event));
     this.shadowRoot.getElementById("shopping-item-form")?.addEventListener("submit", (event) => this._addShoppingItem(event));
     this.shadowRoot.getElementById("cancel-location")?.addEventListener("click", () => { if (this._isBusy()) return; this._showLocation = false; this._editingLocation = ""; this._render(); });
-    this.shadowRoot.getElementById("cancel-create")?.addEventListener("click", () => { if (this._isBusy()) return; this._showCreate = false; this._render(); });
+    this.shadowRoot.getElementById("cancel-create")?.addEventListener("click", () => { if (this._isBusy()) return; this._showCreate = false; this._createContainerLocation = ""; this._render(); });
     this.shadowRoot.querySelectorAll("[data-queue-empty-containers]").forEach((button) => button.addEventListener("click", () => this._queueEmptyContainers()));
-    this.shadowRoot.querySelectorAll("[data-select-location]").forEach((button) => button.addEventListener("click", () => { if (this._isBusy()) return; this._selectedLocation = button.dataset.selectLocation; this._render(); }));
+    this.shadowRoot.querySelectorAll("[data-select-location]").forEach((card) => {
+      const selectLocation = (event) => {
+        if (
+          this._isBusy()
+          || this._selectedLocation === card.dataset.selectLocation
+          || (card.tagName !== "BUTTON" && event.target.closest("button, input, select, textarea, a, form"))
+        ) {
+          return;
+        }
+        this._selectedLocation = card.dataset.selectLocation;
+        this._render();
+      };
+      card.addEventListener("click", selectLocation);
+      card.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") {
+          return;
+        }
+        event.preventDefault();
+        selectLocation(event);
+      });
+    });
     this.shadowRoot.querySelectorAll("[data-edit-location]").forEach((button) => button.addEventListener("click", () => { if (this._isBusy()) return; this._editingLocation = button.dataset.editLocation; this._showLocation = true; this._render(); }));
+    this.shadowRoot.querySelectorAll("[data-add-container-location]").forEach((button) => button.addEventListener("click", () => this._openCreateContainer(button.dataset.addContainerLocation)));
     this.shadowRoot.querySelectorAll("[data-delete-location]").forEach((button) => button.addEventListener("click", () => this._deleteLocation(button.dataset.deleteLocation, button.dataset.locationName, button.dataset.locationProvider, button.dataset.locationLocal)));
     this.shadowRoot.querySelectorAll("[data-move-tag]").forEach((select) => select.addEventListener("change", () => this._moveContainer(select.dataset.moveTag, select.value)));
     this.shadowRoot.querySelectorAll("[data-adjust-container]").forEach((form) => form.addEventListener("submit", (event) => this._adjustContainer(event)));
@@ -817,7 +910,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       <section class="stack">
         <div class="stack">
           <section class="card">
-            <div class="toolbar"><h2>Storage locations</h2><div class="actions"><button type="button" id="add-location">Add location</button><button type="button" id="add-container" class="secondary">Add container</button></div></div>
+            <div class="toolbar"><h2>Storage locations</h2><div class="actions"><button type="button" id="add-location">Add location</button></div></div>
           </section>
           ${locations.map((location) => this._locationCard(location, containers, locations, location.id === selectedLocation)).join("") || this._emptyCard("Create storage locations in Grocy, or enable DEV mode for mocked locations.")}
         </div>
@@ -879,8 +972,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const shopping = data?.shopping || {};
     const foods = data?.foods || [];
     const recipes = data?.recipes || [];
-    const containers = data?.containers || [];
-    const locations = data?.locations || [];
     const productAttention = data?.product_attention || [];
     const mealInventory = data?.meal_inventory?.components || [];
     const providers = (operations.catalog_providers || []).join(" + ") || "none";
@@ -896,13 +987,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       .map(([provider, count]) => `<p class="muted subline">${this._safe(provider)}: ${this._safe(count)} recipes</p>`)
       .join("");
     return `<section class="stack">
-      <section class="grid">
-        ${this._metric("Catalog mode", mode)}
-        ${this._metric("Foods", summary.foods ?? foods.length)}
-        ${this._metric("Recipes", summary.recipes ?? recipes.length)}
-        ${this._metric("Containers", summary.containers ?? containers.length)}
-        ${this._metric("Locations", locations.length)}
-      </section>
       <section class="sections">
         <div class="stack">
           <section class="card">
@@ -1009,13 +1093,50 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const productTarget = shopping.product_backed_target || "grocy";
     const textTarget = shopping.free_text_target || "grocy";
     const minimumStock = shopping.grocy_minimum_stock ? "minimum stock available" : "minimum stock unavailable";
-    const catalogCards = activeTab === "storage" ? "" : `
+    const missing = summary.missing ?? 0;
+    const empty = summary.empty ?? 0;
+    const dirty = summary.dirty ?? 0;
+    const dashboardSeverity = badHealth || missing || empty ? "critical" : dirty ? "warning" : "ok";
+    if (activeTab === "dashboard") {
+      return `<section class="ops-strip">
+        <div class="ops-card ${dashboardSeverity}"><strong>Critical: ${this._safe((badHealth || 0) + (missing || 0) + (empty || 0))}</strong><span>${this._safe(badHealth)} storage · ${this._safe(missing)} missing · ${this._safe(empty)} empty</span></div>
+        <div class="ops-card ${badHealth ? "warning" : "ok"}"><strong>Storage alerts: ${this._safe(badHealth)}</strong><span>${this._safe(storageAttention.unhealthy_locations_count ?? 0)} unhealthy locations</span></div>
+        <div class="ops-card ${missing ? "warning" : "ok"}"><strong>Missing prep: ${this._safe(missing)}</strong><span>${this._safe(summary.ready ?? 0)} ready components</span></div>
+        <div class="ops-card ${empty ? "warning" : "ok"}"><strong>Empty containers: ${this._safe(empty)}</strong><span>${this._safe(dirty)} dirty containers</span></div>
+      </section>`;
+    }
+    if (activeTab === "inventory") {
+      return `<section class="ops-strip triple">
+        <div class="ops-card"><strong>Active containers: ${this._safe(summary.containers ?? 0)}</strong><span>${this._safe(empty)} empty · ${this._safe(dirty)} dirty</span></div>
+        <div class="ops-card ${summary.low ? "warning" : "ok"}"><strong>Low stock: ${this._safe(summary.low ?? 0)}</strong><span>${this._safe(summary.items ?? 0)} stocked items</span></div>
+        <div class="ops-card"><strong>Shopping target</strong><span>Products: ${this._safe(productTarget)} · Text: ${this._safe(textTarget)}</span></div>
+      </section>`;
+    }
+    if (activeTab === "storage") {
+      return `<section class="ops-strip compact">
+        <div class="ops-card ${badHealth ? "warning" : "ok"}"><strong>Storage alerts: ${this._safe(badHealth)}</strong><span>${this._safe(storageAttention.unhealthy_locations_count ?? 0)} unhealthy locations</span></div>
+        <div class="ops-card"><strong>Location contents</strong><span>${this._safe(summary.containers ?? 0)} containers · ${this._safe(storageAttention.prepared_inventory_at_risk_count ?? 0)} prepared at risk</span></div>
+      </section>`;
+    }
+    if (activeTab === "planning") {
+      return `<section class="ops-strip triple">
+        <div class="ops-card ${missing ? "warning" : "ok"}"><strong>Missing: ${this._safe(missing)}</strong><span>${this._safe(summary.ready ?? 0)} ready</span></div>
+        <div class="ops-card ${storageAttention.prepared_inventory_at_risk_count ? "warning" : "ok"}"><strong>Prep at risk: ${this._safe(storageAttention.prepared_inventory_at_risk_count ?? 0)}</strong><span>${this._safe(badHealth)} storage alerts</span></div>
+        <div class="ops-card"><strong>Shopping: ${this._safe(shoppingProvider)}</strong><span>${this._safe(minimumStock)}</span></div>
+      </section>`;
+    }
+    if (activeTab === "info") {
+      return `<section class="ops-strip">
+        <div class="ops-card"><strong>Catalog: ${this._safe(mode)}</strong><span>${this._safe(providers)}</span></div>
+        <div class="ops-card"><strong>Catalog size</strong><span>${this._safe(summary.foods ?? 0)} foods / ${this._safe(summary.recipes ?? 0)} recipes</span></div>
+        <div class="ops-card ${shopping.grocy_configured ? "ok" : "warning"}"><strong>Grocy</strong><span>${shopping.grocy_configured ? "connected" : "not configured"} · ${this._safe(minimumStock)}</span></div>
+        <div class="ops-card ${shopping.kitchenowl_configured ? "ok" : "warning"}"><strong>KitchenOwl</strong><span>${shopping.kitchenowl_configured ? "connected" : "not configured"} · ${this._safe(shoppingProvider)}</span></div>
+      </section>`;
+    }
+    return `<section class="ops-strip triple">
       <div class="ops-card"><strong>Catalog: ${this._safe(mode)}</strong><span>${this._safe(providers)}</span></div>
-      <div class="ops-card"><strong>Catalog size</strong><span>${this._safe(summary.foods ?? 0)} foods / ${this._safe(summary.recipes ?? 0)} recipes</span></div>`;
-    return `<section class="ops-strip${activeTab === "storage" ? " compact" : ""}">
-      ${catalogCards}
-      <div class="ops-card"><strong class="${badHealth ? "warn" : "ok"}">Storage alerts: ${this._safe(badHealth)}</strong><span>${this._safe(storageAttention.unhealthy_locations_count ?? 0)} unhealthy locations</span></div>
-      <div class="ops-card"><strong>Shopping: ${this._safe(shoppingProvider)}</strong><span>Products: ${this._safe(productTarget)} · Text: ${this._safe(textTarget)} · ${this._safe(minimumStock)}</span></div>
+      <div class="ops-card"><strong>Socket/dev</strong><span>${operations.dev_mode ? "DEV simulator available" : "Live providers"}</span></div>
+      <div class="ops-card"><strong>Shopping: ${this._safe(shoppingProvider)}</strong><span>Products: ${this._safe(productTarget)} · Text: ${this._safe(textTarget)}</span></div>
     </section>`;
   }
 
@@ -1048,7 +1169,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _createForm(locations, foods, recipes) {
-    const locationOptions = locations.map((location) => `<option value="${this._safe(location.id)}">${this._safe(location.name)}</option>`).join("");
+    const draftLocation = locations.some((location) => location.id === this._createContainerLocation) ? this._createContainerLocation : this._selectedLocation;
+    const locationOptions = locations.map((location) => `<option value="${this._safe(location.id)}"${location.id === draftLocation ? " selected" : ""}>${this._safe(location.name)}</option>`).join("");
     const sublocationOptions = locations.flatMap((location) => (location.sublocations || []).map((sublocation) => `<option value="${this._safe(sublocation)}">${this._safe(location.name)} / ${this._safe(sublocation)}</option>`)).join("");
     const foodOptions = foods.map((food) => `<option value="${this._safe(food.id)}">${this._safe(food.label)}</option>`).join("");
     const recipeOptions = recipes.map((recipe) => `<option value="${this._safe(recipe.id)}">${this._safe(recipe.label)}</option>`).join("");
@@ -1074,6 +1196,15 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <div class="actions"><button type="button" class="secondary" id="cancel-create">Cancel</button><button type="submit">Save container</button></div>
       </form>
     `;
+  }
+
+  _openCreateContainer(locationId = "") {
+    if (this._isBusy()) return;
+    this._tab = "storage";
+    this._selectedLocation = locationId || this._selectedLocation;
+    this._createContainerLocation = locationId || this._selectedLocation;
+    this._showCreate = true;
+    this._render();
   }
 
   async _createContainer(event) {
@@ -1111,6 +1242,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     await this._withBusy("saving container", async () => {
       await this._hass.callService("mise_en_place_assistant", contentKind === "ingredient" ? "create_container" : "create_recipe_container", data);
       this._showCreate = false;
+      this._createContainerLocation = "";
       this._notice = "Container saved.";
       await this._loadIfNoEventSocket();
     }, (err) => {
@@ -1649,7 +1781,19 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _managedContainerRow(container, locations) {
-    return this._containerRow(container, "", [], [], this._moveSelect(container, locations));
+    const empty = this._quantityNumber(container) === 0;
+    const details = [
+      this._containerDateLine(container),
+      container.updated_at ? `Updated ${this._formatTime(container.updated_at)}` : "",
+    ];
+    return this._containerRow(container, empty ? "empty" : "", details, [], this._storageContainerActions(container, locations));
+  }
+
+  _storageContainerActions(container, locations) {
+    const empty = this._quantityNumber(container) === 0;
+    const clear = `<button type="button" class="icon-button danger" data-clear-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}" title="Clear container" aria-label="Clear container"><ha-icon icon="mdi:delete-sweep-outline"></ha-icon></button>`;
+    const archive = empty ? `<button type="button" class="icon-button danger" data-archive-container="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.name)}" title="Archive container" aria-label="Archive container"><ha-icon icon="mdi:archive-arrow-down-outline"></ha-icon></button>` : "";
+    return `${this._moveSelect(container, locations)}${clear}${archive}`;
   }
 
   _moveSelect(container, locations) {
@@ -1657,7 +1801,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       const base = [`<option value="${this._safe(location.id)}||">${this._safe(location.name)}</option>`];
       return base.concat((location.sublocations || []).map((sublocation) => `<option value="${this._safe(location.id)}||${this._safe(sublocation)}">${this._safe(location.name)} / ${this._safe(sublocation)}</option>`));
     }).join("");
-    return `<select data-move-tag="${this._safe(container.tag_id)}" title="Move container" aria-label="Move container"><option value="">Move...</option>${choices}</select>`;
+    return `<span class="icon-select" title="Move container"><ha-icon icon="mdi:map-marker-right-outline"></ha-icon><select data-move-tag="${this._safe(container.tag_id)}" aria-label="Move container"><option value="">Move container</option>${choices}</select></span>`;
   }
 
   _productAttentionRow(item) {
@@ -1762,16 +1906,18 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const sublocations = (location.sublocations || []).map((sublocation) => `<span class="pill">${this._safe(sublocation)}</span>`).join("");
     const contents = selected ? this._locationContents(location, containers, locations) : "";
     const monitoring = selected ? this._locationMonitoring(health, readings) : "";
-    const problems = selected && health.problems?.length ? `<p class="muted subline">${this._safe(health.problems.join(" · "))}</p>` : "";
+    const facts = selected ? this._locationFacts(location, containers, health) : "";
+    const problems = selected && health.problems?.length ? `<div class="location-problems"><ha-icon icon="mdi:alert"></ha-icon><span>${this._safe(health.problems.join(" · "))}</span></div>` : "";
     const removeButton = location.provider === "mocked" && location.local
       ? `<button class="icon-button danger" data-delete-location="${this._safe(location.id)}" data-location-name="${this._safe(location.name)}" data-location-provider="${this._safe(location.provider || "")}" data-location-local="true" title="Remove location" aria-label="Remove location"><ha-icon icon="mdi:trash-can-outline"></ha-icon></button>`
       : "";
     const locationType = location.location_type || "other";
     const contentAttention = this._locationContentAttention(location, containers);
+    const addContainerButton = location.editable === false ? "" : `<button class="icon-button" data-add-container-location="${this._safe(location.id)}" title="Add container here" aria-label="Add container here"><ha-icon icon="mdi:plus-box-outline"></ha-icon></button>`;
     const selectButton = selected ? "" : `<button class="icon-button" data-select-location="${this._safe(location.id)}" title="View containers" aria-label="View containers"><ha-icon icon="mdi:format-list-bulleted"></ha-icon></button>`;
     const selectedChip = selected ? `<span class="location-chip selected-chip"><ha-icon icon="mdi:check-circle"></ha-icon><span>Selected</span></span>` : "";
-    const actions = location.editable !== false ? `<div class="location-card-actions">${selectButton}<button class="icon-button" data-edit-location="${this._safe(location.id)}" title="Edit location" aria-label="Edit location"><ha-icon icon="mdi:pencil-outline"></ha-icon></button>${removeButton}</div>` : `<div class="location-card-actions">${selectButton}</div>`;
-    return `<article class="card location-card type-${this._safe(this._cssToken(locationType))}${selected ? " selected" : ""}">
+    const actions = location.editable !== false ? `<div class="location-card-actions">${selectButton}${addContainerButton}<button class="icon-button" data-edit-location="${this._safe(location.id)}" title="Edit location" aria-label="Edit location"><ha-icon icon="mdi:pencil-outline"></ha-icon></button>${removeButton}</div>` : `<div class="location-card-actions">${selectButton}</div>`;
+    return `<article class="card location-card type-${this._safe(this._cssToken(locationType))}${selected ? " selected" : ""}" data-select-location="${this._safe(location.id)}" tabindex="0" aria-expanded="${selected ? "true" : "false"}">
       <div class="location-card-header">
         <div>
           <div class="location-card-title">
@@ -1789,11 +1935,33 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <div class="location-count"><strong>${this._safe(location.containers)}</strong><span>containers</span>${actions}</div>
       </div>
       <div class="location-card-body">
-        ${monitoring}
-        ${problems}
+        ${selected ? `<section class="location-overview">${facts}${monitoring}${problems}</section>` : ""}
         ${contents}
       </div>
     </article>`;
+  }
+
+  _locationFacts(location, containers = [], health = {}) {
+    const matching = containers.filter((container) => container.location_id === location.id);
+    const sublocationCount = new Set(matching.map((container) => container.sublocation || "Main")).size;
+    const kinds = matching.reduce((acc, container) => {
+      const kind = container.content_kind || "empty";
+      acc[kind] = (acc[kind] || 0) + 1;
+      return acc;
+    }, {});
+    const contentMix = Object.entries(kinds)
+      .map(([kind, count]) => `${count} ${kind.replaceAll("_", " ")}`)
+      .join(" · ") || "No contents";
+    const configured = health.status && health.status !== "not_configured";
+    const status = configured ? this._storageStatusLabel(health.status, ["warning", "critical"].includes(health.status) ? 1 : 0) : "No live sensors";
+    const provider = [location.provider || "local", location.local ? "local" : ""].filter(Boolean).join(" · ");
+    const facts = [
+      ["Status", status],
+      ["Sublocations", sublocationCount ? `${sublocationCount} active / ${(location.sublocations || []).length || 0} configured` : `${(location.sublocations || []).length || 0} configured`],
+      ["Contents", contentMix],
+      ["Source", provider],
+    ];
+    return `<div class="location-facts">${facts.map(([label, value]) => `<div class="location-fact"><span>${this._safe(label)}</span><strong>${this._safe(value)}</strong></div>`).join("")}</div>`;
   }
 
   _locationArea(location) {
@@ -1858,7 +2026,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     }
     const sections = Array.from(groups.entries()).map(([sublocation, items]) => `
       <section class="content-group">
-        <h3>${this._safe(sublocation)}</h3>
+        <h3><span>${this._safe(sublocation)}</span><span class="content-count">${this._safe(items.length)} ${items.length === 1 ? "container" : "containers"}</span></h3>
         ${items.map((item) => this._locationContentRow(item, locations)).join("")}
       </section>
     `).join("");
