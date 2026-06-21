@@ -266,7 +266,7 @@ class TestCatalogProviderContract(unittest.TestCase):
         self.assertIn("assembled_components", STORE_SOURCE)
         self.assertIn('for index in range(1, 13)', STORE_SOURCE)
         self.assertIn('f"demo:tv-dinner-{index:02d}"', STORE_SOURCE)
-        self.assertIn('"TV dinner container"', STORE_SOURCE)
+        self.assertIn('"Divided meal tray"', STORE_SOURCE)
         self.assertIn("No fridge location is available for TV dinners", STORE_SOURCE)
         self.assertIn("@classmethod\n    def _select_meal_component_sources", STORE_SOURCE)
         self.assertIn("key=cls._meal_candidate_rank", STORE_SOURCE)

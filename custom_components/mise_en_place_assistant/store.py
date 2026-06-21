@@ -1554,26 +1554,26 @@ class MiseEnPlaceAssistantInventory:
             ("demo:milk-empty", "Milk carton", "mocked:whole-milk", 0, "Fridge", "Door bin", "ingredient", None),
             ("demo:rice", "Rice jar", "mocked:basmati-rice", 1200, "Pantry", "Dry goods", "ingredient", None),
             ("demo:coffee", "Coffee canister", "mocked:coffee", 350, "Pantry", "Coffee shelf", "ingredient", None),
-            ("demo:peas", "Freezer peas", "mocked:frozen-peas", 600, "Freezer", "Door bin", "ingredient", None),
-            ("demo:curry", "Curry portions", "mocked:recipe:chicken-curry", 4, "Fridge", "Top shelf", "meal", "2026-06-24"),
-            ("demo:turkey-meatballs", "Turkey meatballs", "mocked:recipe:turkey-meatballs", 3, "Fridge", "Top shelf", "meal", "2026-06-27"),
-            ("demo:beef-stew", "Beef stew", "mocked:recipe:beef-stew", 3, "Freezer", "Top shelf", "meal", "2026-07-20"),
-            ("demo:salmon", "Salmon portions", "mocked:recipe:salmon", 3, "Freezer", "Top shelf", "meal", "2026-07-04"),
-            ("demo:tofu-squares", "Tofu squares", "mocked:recipe:tofu-squares", 3, "Fridge", "Top shelf", "meal", "2026-06-29"),
-            ("demo:lentil-portions", "Lentil loaf portions", "mocked:recipe:lentil-loaf", 2, "Freezer", "Top shelf", "meal", "2026-07-12"),
-            ("demo:vegetables", "Roast vegetables", "mocked:recipe:roast-vegetables", 4, "Fridge", "Top shelf", "meal", "2026-06-25"),
-            ("demo:broccoli", "Roasted broccoli", "mocked:recipe:broccoli", 3, "Fridge", "Top shelf", "meal", "2026-06-23"),
-            ("demo:braised-greens", "Braised greens", "mocked:recipe:braised-greens", 3, "Fridge", "Top shelf", "meal", "2026-06-26"),
-            ("demo:carrots", "Roasted carrots", "mocked:recipe:carrots", 3, "Fridge", "Top shelf", "meal", "2026-06-30"),
-            ("demo:buttered-peas", "Buttered peas", "mocked:recipe:peas", 3, "Freezer", "Door bin", "meal", "2026-07-06"),
-            ("demo:mealie-veg-peas", "Soy ginger peas", "mocked:recipe:mealie-vegetable-038", 3, "Freezer", "Door bin", "meal", "2026-07-08"),
-            ("demo:mealie-veg-corn", "Lemon herb corn", "mocked:recipe:mealie-vegetable-020", 2, "Freezer", "Door bin", "meal", "2026-07-10"),
-            ("demo:meal-rice", "Cooked rice", "mocked:recipe:rice", 4, "Fridge", "Top shelf", "meal", "2026-06-24"),
-            ("demo:sweet-potatoes", "Sweet potatoes", "mocked:recipe:sweet-potatoes", 4, "Fridge", "Top shelf", "meal", "2026-06-28"),
-            ("demo:noodles", "Sesame noodles", "mocked:recipe:noodles", 3, "Fridge", "Top shelf", "meal", "2026-06-26"),
-            ("demo:mealie-starch-oats", "Grain bowl oats", "mocked:recipe:mealie-starch-015", 3, "Pantry", "Dry goods", "meal", "2026-07-03"),
-            ("demo:mealie-starch-bread", "Roasted sourdough", "mocked:recipe:mealie-starch-018", 2, "Pantry", "Dry goods", "meal", "2026-07-02"),
-            ("demo:lentil-loaf", "Lentil loaf", "mocked:recipe:lentil-loaf", 0, "Freezer", "Top shelf", "recipe", None),
+            ("demo:peas", "Freezer bag", "mocked:frozen-peas", 600, "Freezer", "Door bin", "ingredient", None),
+            ("demo:curry", "Round deli cup", "mocked:recipe:chicken-curry", 4, "Fridge", "Top shelf", "meal", "2026-06-24"),
+            ("demo:turkey-meatballs", "Meal prep tray", "mocked:recipe:turkey-meatballs", 3, "Fridge", "Top shelf", "meal", "2026-06-27"),
+            ("demo:beef-stew", "Freezer-safe deli cup", "mocked:recipe:beef-stew", 3, "Freezer", "Top shelf", "meal", "2026-07-20"),
+            ("demo:salmon", "Vacuum-seal bag", "mocked:recipe:salmon", 3, "Freezer", "Top shelf", "meal", "2026-07-04"),
+            ("demo:tofu-squares", "Shallow prep pan", "mocked:recipe:tofu-squares", 3, "Fridge", "Top shelf", "meal", "2026-06-29"),
+            ("demo:lentil-portions", "Freezer brick mold", "mocked:recipe:lentil-loaf", 2, "Freezer", "Top shelf", "meal", "2026-07-12"),
+            ("demo:vegetables", "Half-pan insert", "mocked:recipe:roast-vegetables", 4, "Fridge", "Top shelf", "meal", "2026-06-25"),
+            ("demo:broccoli", "Prep tray", "mocked:recipe:broccoli", 3, "Fridge", "Top shelf", "meal", "2026-06-23"),
+            ("demo:braised-greens", "Cambro container", "mocked:recipe:braised-greens", 3, "Fridge", "Top shelf", "meal", "2026-06-26"),
+            ("demo:carrots", "Sheet pan container", "mocked:recipe:carrots", 3, "Fridge", "Top shelf", "meal", "2026-06-30"),
+            ("demo:buttered-peas", "Freezer deli cup", "mocked:recipe:peas", 3, "Freezer", "Door bin", "meal", "2026-07-06"),
+            ("demo:mealie-veg-peas", "Small freezer bag", "mocked:recipe:mealie-vegetable-038", 3, "Freezer", "Door bin", "meal", "2026-07-08"),
+            ("demo:mealie-veg-corn", "Small freezer cup", "mocked:recipe:mealie-vegetable-020", 2, "Freezer", "Door bin", "meal", "2026-07-10"),
+            ("demo:meal-rice", "Rice cambro", "mocked:recipe:rice", 4, "Fridge", "Top shelf", "meal", "2026-06-24"),
+            ("demo:sweet-potatoes", "Steam table pan", "mocked:recipe:sweet-potatoes", 4, "Fridge", "Top shelf", "meal", "2026-06-28"),
+            ("demo:noodles", "Noodle deli cup", "mocked:recipe:noodles", 3, "Fridge", "Top shelf", "meal", "2026-06-26"),
+            ("demo:mealie-starch-oats", "Dry goods cambro", "mocked:recipe:mealie-starch-015", 3, "Pantry", "Dry goods", "meal", "2026-07-03"),
+            ("demo:mealie-starch-bread", "Bread box", "mocked:recipe:mealie-starch-018", 2, "Pantry", "Dry goods", "meal", "2026-07-02"),
+            ("demo:lentil-loaf", "Freezer loaf pan", "mocked:recipe:lentil-loaf", 0, "Freezer", "Top shelf", "recipe", None),
         )
         created = 0
         for tag_id, name, item_id, quantity, location, sublocation, content_kind, best_before_date in examples:
@@ -1600,12 +1600,12 @@ class MiseEnPlaceAssistantInventory:
             tag_id = f"demo:tv-dinner-{index:02d}"
             await self._async_create_container(
                 tag_id=tag_id,
-                name=f"TV dinner container {index}",
+                name=f"Divided meal tray {index}",
                 quantity=0,
                 location="Fridge",
                 sublocation="Top shelf",
                 unit="portions",
-                item_label="TV dinner container",
+                item_label="Divided meal tray",
                 item_format="tv dinner",
                 source_provider="local",
                 content_kind="ingredient",
@@ -1832,7 +1832,7 @@ class MiseEnPlaceAssistantInventory:
         before = dict(container)
         display_unit = container.get("display_unit", container.get("unit", DEFAULT_UNIT))
         container_type = self._normalized_container_type(container)
-        empty_label = "TV dinner container" if container_type == "tv dinner" else "Empty container"
+        empty_label = "Divided meal tray" if container_type == "tv dinner" else "Empty container"
         shell_name = (
             container.get("container_shell_name")
             or (empty_label if container_type == "tv dinner" else container.get("name"))
@@ -1965,7 +1965,7 @@ class MiseEnPlaceAssistantInventory:
 
         await self.async_create_container(
             tag_id=tag_id,
-            name="DEV CRUD Tub",
+            name="Round deli cup",
             quantity=1,
             location_id=location_id,
             sublocation="Top shelf",
@@ -1982,7 +1982,7 @@ class MiseEnPlaceAssistantInventory:
         await self.async_update_container(
             tag_id=tag_id,
             quantity=2,
-            name="DEV CRUD Tub Updated",
+            name="Rectangular prep container",
             location_id=location_id,
             sublocation="Bottom drawer",
         )

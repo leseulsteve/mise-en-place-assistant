@@ -11,7 +11,7 @@ class FakeShadowRoot {
         addEventListener() {},
         elements: {
           tag_id: { value: "demo:peas" },
-          name: { value: "Freezer bin" },
+          name: { value: "Freezer bag" },
           quantity: { value: "0" },
           unit: { value: "bags" },
           location_id: { value: "freezer" },
@@ -107,7 +107,7 @@ panel.hass = {
     summary: { containers: 2, locations: 2, items: 1, foods: 2, recipes: 1, low: 1, dirty: 0 },
     containers: [{
       tag_id: "demo:sauce",
-      name: "Sauce tub",
+      name: "Round deli cup",
       item_label: "Tomato sauce",
       quantity: 2,
       unit: "cups",
@@ -131,7 +131,7 @@ panel.hass = {
       },
     }, {
       tag_id: "demo:thawed-stew",
-      name: "Thawed stew tub",
+      name: "Freezer-safe deli cup",
       item_label: "Beef stew",
       quantity: 1,
       unit: "portion",
@@ -144,7 +144,7 @@ panel.hass = {
       content_kind: "meal",
     }, {
       tag_id: "demo:broccoli",
-      name: "Broccoli prep tub",
+      name: "Prep tray",
       item_label: "Roasted broccoli",
       quantity: 2,
       unit: "portions",
@@ -156,7 +156,7 @@ panel.hass = {
       recipe: { meal_component_role: "veggie", component: "veggie" },
     }, {
       tag_id: "demo:meal-rice",
-      name: "Rice prep tub",
+      name: "Rice cambro",
       item_label: "Cooked basmati rice",
       quantity: 1,
       unit: "portions",
@@ -168,7 +168,7 @@ panel.hass = {
       recipe: { meal_component_role: "starch", component: "starch" },
     }, {
       tag_id: "demo:curry",
-      name: "Curry prep tub",
+      name: "Round deli cup",
       item_label: "Chicken curry",
       quantity: 1,
       unit: "portions",
@@ -180,7 +180,7 @@ panel.hass = {
       recipe: { meal_component_role: "protein", component: "protein" },
     }, {
       tag_id: "demo:braised-greens",
-      name: "Greens prep tub",
+      name: "Cambro container",
       item_label: "Braised greens",
       quantity: 1,
       unit: "portions",
@@ -192,7 +192,7 @@ panel.hass = {
       recipe: { meal_component_role: "veggie", component: "veggie" },
     }, {
       tag_id: "demo:sweet-potatoes",
-      name: "Sweet potato prep tub",
+      name: "Steam table pan",
       item_label: "Sweet potatoes",
       quantity: 1,
       unit: "portions",
@@ -204,7 +204,7 @@ panel.hass = {
       recipe: { meal_component_role: "starch", component: "starch" },
     }, {
       tag_id: "demo:salmon",
-      name: "Salmon prep tub",
+      name: "Vacuum-seal bag",
       item_label: "Salmon portions",
       quantity: 1,
       unit: "portions",
@@ -216,7 +216,7 @@ panel.hass = {
       recipe: { meal_component_role: "protein", component: "protein" },
     }, {
       tag_id: "demo:peas",
-      name: "Freezer bin",
+      name: "Freezer bag",
       item_label: "Frozen peas",
       quantity: 0,
       unit: "bags",
@@ -228,7 +228,7 @@ panel.hass = {
       content_kind: "ingredient",
     }, {
       tag_id: "demo:frozen-tv-dinner",
-      name: "Microwave TV dinner",
+      name: "Divided meal tray",
       item_label: "Chicken curry + Cooked basmati rice + Roasted broccoli",
       quantity: 1,
       unit: "portion",
@@ -242,8 +242,8 @@ panel.hass = {
       container_type: "tv dinner",
     }, {
       tag_id: "demo:tv-dinner-01",
-      name: "TV dinner container 1",
-      item_label: "TV dinner container",
+      name: "Divided meal tray 1",
+      item_label: "Divided meal tray",
       quantity: 0,
       unit: "portions",
       canonical_quantity: 0,
@@ -255,8 +255,8 @@ panel.hass = {
       container_type: "tv dinner",
     }, {
       tag_id: "demo:tv-dinner-02",
-      name: "TV dinner container 2",
-      item_label: "TV dinner container",
+      name: "Divided meal tray 2",
+      item_label: "Divided meal tray",
       quantity: 0,
       unit: "portions",
       canonical_quantity: 0,
@@ -312,13 +312,13 @@ panel.hass = {
       containers: 1,
       locations: { Fridge: { cans: 2 } },
       physical_containers: [{
-        name: "Sauce tub",
+        name: "Round deli cup",
         quantity: 2,
         unit: "cups",
         location: "Fridge",
       }],
       freshness_dates: [{
-        container: "Sauce tub",
+        container: "Round deli cup",
         best_before_date: "2026-07-01",
         purchased_date: "2026-06-18",
         opened_date: "2026-06-19",
@@ -326,7 +326,7 @@ panel.hass = {
       }],
       last_stock_log: {
         action: "Grocy stock updated",
-        message: "Grocy stock was updated for Sauce tub.",
+        message: "Grocy stock was updated for Round deli cup.",
       },
     }, {
       product_id: "product_sauce",
@@ -592,7 +592,7 @@ panel.hass = {
     empty_containers: [],
     low_containers: [{
       tag_id: "demo:sauce",
-      name: "Sauce tub",
+      name: "Round deli cup",
       item_label: "Tomato sauce",
       quantity: 2,
       unit: "cups",
@@ -643,7 +643,13 @@ assert.match(panel.shadowRoot.innerHTML, /1-7 of 7 stocked products/);
 assert.match(panel.shadowRoot.innerHTML, /Inventory sources/);
 assert.match(panel.shadowRoot.innerHTML, /Grocy stock/);
 assert.match(panel.shadowRoot.innerHTML, /Last stock write/);
-assert.match(panel.shadowRoot.innerHTML, /Fridge: 2 cans/);
+assert.match(panel.shadowRoot.innerHTML, /ID grocy:12/);
+assert.match(panel.shadowRoot.innerHTML, /Locations: Fridge: 2 cans/);
+assert.match(panel.shadowRoot.innerHTML, /Containers: Round deli cup/);
+assert.match(panel.shadowRoot.innerHTML, /Freshness: best before in \d+ days/);
+assert.match(panel.shadowRoot.innerHTML, /opened \d+ days ago/);
+assert.match(panel.shadowRoot.innerHTML, /data-open-tab="storage"/);
+assert.match(panel.shadowRoot.innerHTML, /data-queue-product="grocy:12"/);
 panel._inventoryFilters = { category: "all", source: "grocy", location: "all" };
 panel._inventoryPage = 1;
 panel._render();
@@ -667,15 +673,20 @@ panel._inventoryPageSize = 10;
 panel._inventoryPage = 1;
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Ready to eat soon/);
+assert.match(panel.shadowRoot.innerHTML, /ready-meal-table/);
+assert.match(panel.shadowRoot.innerHTML, /Container and place/);
 assert.match(panel.shadowRoot.innerHTML, /Ready to eat/);
-assert.match(panel.shadowRoot.innerHTML, /Best before 2026-06-22/);
-assert.match(panel.shadowRoot.innerHTML, /Not in freezer for \d+ days/);
+assert.match(panel.shadowRoot.innerHTML, /Best before (tomorrow|in \d+ days|today)/);
+assert.match(panel.shadowRoot.innerHTML, /mdi:snowflake-off/);
+assert.match(panel.shadowRoot.innerHTML, /<strong>\d+<\/strong><span>days?<\/span>/);
 assert.match(panel.shadowRoot.innerHTML, /Beef stew/);
 assert.match(panel.shadowRoot.innerHTML, /Chicken curry \+ Cooked basmati rice \+ Roasted broccoli/);
-assert.match(panel.shadowRoot.innerHTML, /Microwave TV dinner/);
+assert.match(panel.shadowRoot.innerHTML, /Divided meal tray/);
 assert.match(panel.shadowRoot.innerHTML, /data-mark-container-eaten="demo:frozen-tv-dinner"/);
 assert.match(panel.shadowRoot.innerHTML, /Mark eaten/);
 assert.match(panel.shadowRoot.innerHTML, /Fridge \/ Top shelf/);
+assert.match(panel.shadowRoot.innerHTML, /1-\d+ of \d+ ready meals/);
+assert.match(panel.shadowRoot.innerHTML, /data-ready-meal-page/);
 await panel._runContainerService("mark_container_eaten", "demo:frozen-tv-dinner", null, "Could not mark meal eaten.");
 assert.deepEqual(serviceCalls.at(-1), {
   domain: "mise_en_place_assistant",
@@ -684,14 +695,13 @@ assert.deepEqual(serviceCalls.at(-1), {
 });
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Active containers/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Empty containers/);
-assert.doesNotMatch(panel.shadowRoot.innerHTML, /best before 2026-07-01/);
-assert.doesNotMatch(panel.shadowRoot.innerHTML, /Sauce tub: 2 cups/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Round deli cup: 2 cups/);
 panel._tab = "planning";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Prepared components vs Grocy stock/);
 assert.match(panel.shadowRoot.innerHTML, /Tomatoes/);
 assert.match(panel.shadowRoot.innerHTML, /Recipe suggestions/);
-assert.match(panel.shadowRoot.innerHTML, /best before 2026-07-01/);
+assert.match(panel.shadowRoot.innerHTML, /best before in \d+ days/);
 assert.match(panel.shadowRoot.innerHTML, /Missing or unknown/);
 assert.match(panel.shadowRoot.innerHTML, /Prepared components/);
 assert.match(panel.shadowRoot.innerHTML, /mpa:component:sauce/);
@@ -781,7 +791,7 @@ assert.match(panel.shadowRoot.innerHTML, /Recipe rank/);
 assert.match(panel.shadowRoot.innerHTML, /Session details/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Session name/);
 assert.match(panel.shadowRoot.innerHTML, /Scheduled date/);
-assert.match(panel.shadowRoot.innerHTML, /2026-06-21 · all day/);
+assert.match(panel.shadowRoot.innerHTML, /today · all day/);
 assert.match(panel.shadowRoot.innerHTML, /Recipes or meals included/);
 assert.match(panel.shadowRoot.innerHTML, /Number of servings/);
 assert.match(panel.shadowRoot.innerHTML, /Expected finished portions/);
@@ -789,7 +799,7 @@ assert.match(panel.shadowRoot.innerHTML, /Session notes/);
 assert.match(panel.shadowRoot.innerHTML, /Readiness summary/);
 assert.match(panel.shadowRoot.innerHTML, /2 finished portions/);
 assert.match(panel.shadowRoot.innerHTML, /Ingredient readiness/);
-assert.match(panel.shadowRoot.innerHTML, /best before 2026-07-01/);
+assert.match(panel.shadowRoot.innerHTML, /best before in \d+ days/);
 panel._selectPrepSession({ dataset: { selectPrepSession: "prep_next" } });
 assert.match(panel.shadowRoot.innerHTML, /Next prep/);
 assert.match(panel.shadowRoot.innerHTML, /Tomato sauce/);
@@ -802,7 +812,7 @@ assert.match(panel.shadowRoot.innerHTML, /Queue empty containers/);
 assert.match(panel.shadowRoot.innerHTML, /Queue shopping/);
 assert.match(panel.shadowRoot.innerHTML, /Fridge/);
 assert.match(panel.shadowRoot.innerHTML, /Storage safety/);
-assert.match(panel.shadowRoot.innerHTML, /Sauce tub/);
+assert.match(panel.shadowRoot.innerHTML, /Round deli cup/);
 assert.match(panel.shadowRoot.innerHTML, /Container inventory/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Configure Mealie/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /not configured/);
@@ -899,9 +909,9 @@ assert.match(panel.shadowRoot.innerHTML, /<strong>Top shelf<\/strong>/);
 assert.match(panel.shadowRoot.innerHTML, /Top shelf · 4 containers/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Door bin · 1 container/);
 assert.match(panel.shadowRoot.innerHTML, /Tomato sauce/);
-assert.match(panel.shadowRoot.innerHTML, /Sauce tub/);
+assert.match(panel.shadowRoot.innerHTML, /Round deli cup/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Frozen peas/);
-assert.doesNotMatch(panel.shadowRoot.innerHTML, /Freezer bin/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Freezer bag/);
 assert.match(panel.shadowRoot.innerHTML, /Ready meal/);
 assert.match(panel.shadowRoot.innerHTML, /Fridge \/ Top shelf/);
 assert.match(panel.shadowRoot.innerHTML, /demo:sauce/);
@@ -949,8 +959,8 @@ assert.match(panel.shadowRoot.innerHTML, /<span>Status<\/span><strong>No live se
 assert.match(panel.shadowRoot.innerHTML, /class="sublocation-button active" data-location-id="freezer" data-select-sublocation="Door bin"/);
 assert.match(panel.shadowRoot.innerHTML, /Door bin · 2 containers/);
 assert.match(panel.shadowRoot.innerHTML, /Frozen peas/);
-assert.match(panel.shadowRoot.innerHTML, /Freezer bin/);
-assert.match(panel.shadowRoot.innerHTML, /Microwave TV dinner/);
+assert.match(panel.shadowRoot.innerHTML, /Freezer bag/);
+assert.match(panel.shadowRoot.innerHTML, /Divided meal tray/);
 assert.match(panel.shadowRoot.innerHTML, /Freezer \/ Door bin/);
 assert.match(panel.shadowRoot.innerHTML, /Tracked/);
 assert.match(panel.shadowRoot.innerHTML, /title="Mark physical container deleted" aria-label="Mark physical container deleted"/);
@@ -958,12 +968,12 @@ assert.match(panel.shadowRoot.innerHTML, /Empty/);
 panel._openContainerEdit("demo:peas");
 assert.match(panel.shadowRoot.innerHTML, /id="edit-container-form"/);
 assert.match(panel.shadowRoot.innerHTML, /value="demo:peas" readonly/);
-assert.match(panel.shadowRoot.innerHTML, /name="name" value="Freezer bin"/);
+assert.match(panel.shadowRoot.innerHTML, /name="name" value="Freezer bag"/);
 assert.match(panel.shadowRoot.innerHTML, /name="quantity" required type="number" min="0" step="any" value="0"/);
 const editForm = {
   elements: {
     tag_id: { value: "demo:peas" },
-    name: { value: "Freezer door bin" },
+    name: { value: "Freezer door bag" },
     quantity: { value: "3" },
     unit: { value: "bags" },
     location_id: { value: "freezer" },
@@ -980,7 +990,7 @@ assert.deepEqual(serviceCalls.at(-1), {
   data: {
     tag_id: "demo:peas",
     quantity: 3,
-    name: "Freezer door bin",
+    name: "Freezer door bag",
     unit: "bags",
     location_id: "freezer",
     sublocation: "Door bin",

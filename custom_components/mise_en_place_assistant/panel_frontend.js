@@ -22,6 +22,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this._inventoryFilters ??= { category: "all", source: "all", location: "all" };
     this._inventoryPage ??= 1;
     this._inventoryPageSize ??= 10;
+    this._readyMealPage ??= 1;
     this._mealPlanCount ??= 1;
     this._tvDinnerCount ??= 1;
     this._tvDinnerPlan ??= null;
@@ -340,6 +341,10 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           border-top: 1px solid var(--divider-color);
         }
         .pager .actions { margin-left: auto; }
+        .table-wrap {
+          width: 100%;
+          overflow-x: auto;
+        }
         .grid, .debug-grid {
           display: grid;
           grid-template-columns: repeat(5, minmax(130px, 1fr));
@@ -765,6 +770,41 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         .prep-table td:last-child, .prep-table th:last-child {
           text-align: right;
         }
+        .ready-meal-table {
+          min-width: 620px;
+        }
+        .ready-meal-table .name {
+          display: block;
+          margin-bottom: 3px;
+        }
+        .ready-age {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          min-width: 58px;
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          padding: 5px 7px;
+          background: var(--secondary-background-color, rgba(128,128,128,.06));
+          color: var(--primary-text-color);
+          font-weight: 750;
+        }
+        .ready-age ha-icon {
+          --mdc-icon-size: 17px;
+          color: var(--primary-color);
+        }
+        .ready-age strong {
+          font-size: 18px;
+          line-height: 1;
+        }
+        .ready-age span {
+          color: var(--secondary-text-color);
+          font-size: 11px;
+          font-weight: 700;
+        }
+        .ready-age.warn ha-icon, .ready-age.warn strong { color: var(--warning-color, #ff9800); }
+        .ready-age.critical ha-icon, .ready-age.critical strong { color: var(--error-color, #f44336); }
         .prep-source-grid {
           display: grid;
           grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -911,7 +951,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <header>
           <div>
             <h1>Mise en Place Assistant</h1>
-            <p class="muted">${data ? `Updated ${new Date().toLocaleTimeString()}` : "Loading overview..."}</p>
+            <p class="muted">${data ? "Updated just now" : "Loading overview..."}</p>
           </div>
         </header>
         ${this._error ? `<div class="error">${this._safe(this._error)}</div>` : ""}
@@ -941,6 +981,10 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-inventory-page-size]").forEach((select) => select.addEventListener("change", () => {
       this._inventoryPageSize = Math.max(5, Number(select.value) || 10);
       this._inventoryPage = 1;
+      this._render();
+    }));
+    this.shadowRoot.querySelectorAll("[data-ready-meal-page]").forEach((button) => button.addEventListener("click", () => {
+      this._readyMealPage = Math.max(1, Number(button.dataset.readyMealPage || 1));
       this._render();
     }));
     this.shadowRoot.getElementById("complete-meal-count")?.addEventListener("change", (event) => {
@@ -1075,6 +1119,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const pagedStocked = this._inventoryPagedProducts(filteredStocked);
     const attention = this._inventoryReviewRows(this._data?.product_attention || []);
     const readyToEatSoon = this._inventoryReadyToEatSoon(containers, locations);
+    const pagedReadyToEatSoon = this._inventoryPagedReadyMeals(readyToEatSoon);
     return `
       <section class="stack">
         <section class="grid">
@@ -1100,7 +1145,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           <div class="stack">
             <section class="card">
               <h2>Ready to eat soon</h2>
-              ${readyToEatSoon.length ? readyToEatSoon.map((meal) => this._inventoryReadyToEatRow(meal, locations)).join("") : this._empty("No ready-to-eat meals need attention.")}
+              ${readyToEatSoon.length ? this._inventoryReadyToEatTable(pagedReadyToEatSoon.items, locations) : this._empty("No ready-to-eat meals need attention.")}
+              ${this._inventoryReadyMealPager(pagedReadyToEatSoon)}
             </section>
             <section class="card">
               <h2>Needs review</h2>
@@ -1546,7 +1592,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const selection = this._prepRecipeSelectionFromState(recipeSuggestions);
     return recipeSuggestions.slice(0, 8).map((recipe, index) => {
       const bestBefore = (recipe.best_before || [])[0];
-      const urgency = bestBefore ? ` · best before ${this._safe(bestBefore.best_before_date)}` : "";
+      const urgency = bestBefore ? ` · best before ${this._safe(this._relativeDateLabel(bestBefore.best_before_date))}` : "";
       const missing = recipe.missing_count ? ` · ${this._safe(recipe.missing_count)} missing` : "";
       const checked = selection[recipe.id]?.selected ?? index === 0;
       const quantity = selection[recipe.id]?.quantity || 1;
@@ -1657,7 +1703,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
 
   _prepRecipeRankRow(recipe) {
     const bestBefore = (recipe.best_before || [])[0];
-    const urgency = bestBefore ? `${bestBefore.label}: ${bestBefore.best_before_date}` : "No urgent best-before";
+    const urgency = bestBefore ? `${bestBefore.label}: ${this._relativeDateLabel(bestBefore.best_before_date)}` : "No urgent best-before";
     return this._summaryRow(recipe.label || "Recipe", [
       recipe.reason || "",
       `Best-before: ${urgency}`,
@@ -1728,8 +1774,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const startDay = String(start).slice(0, 10);
     const endDay = String(end).slice(0, 10);
     return !endDay || endDay === startDay || endDay === this._nextDate(startDay)
-      ? `${startDay} · all day`
-      : `${startDay} to ${endDay}`;
+      ? `${this._relativeDateLabel(startDay)} · all day`
+      : `${this._relativeDateLabel(startDay)} to ${this._relativeDateLabel(endDay)}`;
   }
 
   _nextDate(dateText) {
@@ -2096,7 +2142,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <h2>Add container</h2>
         <div class="form-grid">
           <label>NFC tag<input name="tag_id" required placeholder="04:A1:C2" /></label>
-          <label>Container name<input name="name" placeholder="Freezer bin 1" /></label>
+          <label>Container name<input name="name" placeholder="Freezer bag 1" /></label>
           ${contentSelector}
           ${contentField}
           <label>Quantity<input name="quantity" required type="number" min="0" step="any" value="1" /></label>
@@ -2871,15 +2917,15 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _recipeSuggestionRow(recipe) {
     const coverage = recipe.ingredient_count ? `${recipe.matched_count || 0}/${recipe.ingredient_count}` : "";
     const matched = (recipe.matched || []).map((item) => {
-      const bestBefore = item.best_before_date ? ` · best before ${this._safe(item.best_before_date)}` : "";
+      const bestBefore = item.best_before_date ? ` · best before ${this._safe(this._relativeDateLabel(item.best_before_date))}` : "";
       return `<p class="muted subline">${this._safe(item.label)}${item.stock_quantity ? ` · ${this._safe(item.stock_quantity)}` : ""}${bestBefore}</p>`;
     }).join("");
     const missing = (recipe.missing || []).map((item) => `<p class="muted subline">${this._safe(item.label)}${item.amount ? ` · ${this._safe(item.amount)}` : ""}</p>`).join("");
-    const bestBefore = (recipe.best_before || []).map((item) => `<p class="muted subline">${this._safe(item.label)}: ${this._safe(item.best_before_date)}${item.days !== null && item.days !== undefined ? ` (${this._safe(item.days)} days)` : ""}</p>`).join("");
+    const bestBefore = (recipe.best_before || []).map((item) => `<p class="muted subline">${this._safe(item.label)}: ${this._safe(this._relativeDateLabel(item.best_before_date))}${item.days !== null && item.days !== undefined ? ` (${this._safe(this._relativeDayCount(item.days))})` : ""}</p>`).join("");
     return `<div class="row compact-row">
       <div>
         <p class="name">${this._safe(recipe.label)}</p>
-        <p class="muted subline">${this._safe(recipe.reason || "Matches current stock.")}</p>
+        <p class="muted subline">${this._safe(this._relativeDatesInText(recipe.reason || "Matches current stock."))}</p>
         <div class="compare-grid">
           <div>
             <p class="muted">Stock match</p>
@@ -2914,7 +2960,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const title = item.name || item.item_label || "Container";
     const kind = item.content_kind || "empty";
     const itemLabel = item.item_label && item.item_label !== title ? `<span class="container-item">${this._safe(item.item_label)}</span>` : "";
-    const details = [item.format, ...extraDetails].filter(Boolean).map((line) => `<p class="muted subline">${this._safe(line)}</p>`).join("");
+    const details = [item.format, ...extraDetails].filter(Boolean).map((line) => `<p class="muted subline">${this._safe(this._relativeDatesInText(line))}</p>`).join("");
     const pills = [item.tag_id || "no tag", ...extraPills].filter(Boolean).map((pill) => `<span class="pill">${this._safe(pill)}</span>`).join("");
     const attention = this._containerAttention(item).join("");
     const lifecycle = this._containerLifecycleChip(item);
@@ -3002,7 +3048,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const empty = this._quantityNumber(container) === 0;
     const details = [
       this._containerDateLine(container),
-      container.updated_at ? `Updated ${this._formatTime(container.updated_at)}` : "",
+      container.updated_at ? `Updated ${this._relativeDateTimeLabel(container.updated_at)}` : "",
     ];
     return this._containerRow(container, empty ? "empty" : "", details, [], this._storageContainerActions(container, locations));
   }
@@ -3136,7 +3182,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _summaryRow(title, detailLines = [], options = {}) {
-    const details = detailLines.filter(Boolean).map((line) => `<p class="muted subline">${this._safe(line)}</p>`).join("");
+    const details = detailLines.filter(Boolean).map((line) => `<p class="muted subline">${this._safe(this._relativeDatesInText(line))}</p>`).join("");
     const pills = (options.pills || []).filter(Boolean).map((pill) => `<span class="pill">${this._safe(pill)}</span>`).join("");
     const quantity = options.quantity !== undefined && options.quantity !== null && options.quantity !== ""
       ? `<div class="qty ${this._safe(options.klass || "")}">${this._safe(options.quantity)}${options.unit ? `<br><span class="muted">${this._safe(options.unit)}</span>` : ""}</div>`
@@ -3504,18 +3550,22 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
 
   _inventoryProductRow(item) {
     const amount = this._inventoryAmount(item);
-    const source = this._inventorySourceLabel(item.source);
-    const locations = this._inventoryLocationSummary(item);
-    const pills = this._inventorySummaryPills(item);
+    const freshness = this._inventoryProductFreshness(item);
+    const pills = [...this._inventorySummaryPills(item), freshness.pill].filter(Boolean);
     const lastStock = item.last_stock_log?.action ? `${item.last_stock_log.action}: ${item.last_stock_log.message || ""}` : "";
+    const action = this._inventoryProductActions(item);
     return this._summaryRow(item.label || "Inventory item", [
-      source,
-      locations,
+      this._inventoryProductIdentity(item),
+      this._inventoryLocationSummary(item),
+      this._inventoryPhysicalStockSummary(item),
+      freshness.detail,
       lastStock ? `Last stock write: ${lastStock}` : "",
     ], {
       quantity: amount.value,
       unit: amount.unit,
+      klass: freshness.klass,
       pills,
+      action,
     });
   }
 
@@ -3542,27 +3592,107 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         const leftStatus = this._inventoryDueSoonStatus(left, locationTypes.get(left.location_id) || "");
         const rightStatus = this._inventoryDueSoonStatus(right, locationTypes.get(right.location_id) || "");
         return rightStatus.rank - leftStatus.rank || leftStatus.sortDate.localeCompare(rightStatus.sortDate);
-      })
-      .slice(0, 6);
+      });
+  }
+
+  _inventoryPagedReadyMeals(items = []) {
+    const pageSize = 5;
+    const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+    const page = Math.min(Math.max(1, Number(this._readyMealPage) || 1), pageCount);
+    this._readyMealPage = page;
+    const start = (page - 1) * pageSize;
+    return {
+      items: items.slice(start, start + pageSize),
+      page,
+      pageCount,
+      pageSize,
+      total: items.length,
+      start: items.length ? start + 1 : 0,
+      end: Math.min(items.length, start + pageSize),
+    };
+  }
+
+  _inventoryReadyMealPager(page = {}) {
+    if (!page.total) {
+      return "";
+    }
+    return `
+      <div class="pager">
+        <span class="muted">${this._safe(page.start)}-${this._safe(page.end)} of ${this._safe(page.total)} ready meals</span>
+        <div class="actions">
+          <button type="button" class="secondary" data-ready-meal-page="${this._safe(page.page - 1)}" ${page.page <= 1 ? "disabled" : ""}>Previous</button>
+          <span class="muted">Page ${this._safe(page.page)} of ${this._safe(page.pageCount)}</span>
+          <button type="button" class="secondary" data-ready-meal-page="${this._safe(page.page + 1)}" ${page.page >= page.pageCount ? "disabled" : ""}>Next</button>
+        </div>
+      </div>
+    `;
+  }
+
+  _inventoryReadyToEatTable(containers = [], locations = []) {
+    return `
+      <div class="table-wrap">
+        <table class="prep-table ready-meal-table">
+          <thead>
+            <tr>
+              <th>Meal</th>
+              <th>Container and place</th>
+              <th>Qty</th>
+              <th>Out</th>
+              <th>Urgency</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>${containers.map((container) => this._inventoryReadyToEatRow(container, locations)).join("")}</tbody>
+        </table>
+      </div>
+    `;
   }
 
   _inventoryReadyToEatRow(container, locations = []) {
     const locationType = (locations.find((location) => location.id === container.location_id) || {}).location_type || "";
     const status = this._inventoryDueSoonStatus(container, locationType);
-    const storageLabel = this._inventoryReadyStorageLabel(container, locationType);
     const location = this._containerPlace(container) || "No location";
     const quantity = `${container.quantity ?? 0} ${container.unit || ""}`.trim();
-    return this._summaryRow(container.item_label || container.name || "Ready meal", [
-      container.name || "",
-      location,
-      status.label,
-      storageLabel && storageLabel !== status.label ? storageLabel : "",
-    ], {
-      quantity,
-      klass: status.klass,
-      pills: ["Ready to eat"],
-      action: `<button type="button" class="secondary" data-mark-container-eaten="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.item_label || container.name || "meal")}">Mark eaten</button>`,
-    });
+    const label = container.item_label || container.name || "Ready meal";
+    const containerLabel = container.name && container.name !== label ? container.name : "Ready meal container";
+    const urgency = this._inventoryReadyMealUrgency(container, status);
+    return `
+      <tr>
+        <td><span class="name">${this._safe(label)}</span><span class="muted subline">Ready to eat</span></td>
+        <td><span class="name">${this._safe(containerLabel)}</span><span class="muted subline">${this._safe(location)}</span></td>
+        <td>${this._safe(quantity || "1")}</td>
+        <td>${this._inventoryReadyAgeBadge(container, locationType)}</td>
+        <td class="${this._safe(status.klass)}">${this._safe(urgency)}</td>
+        <td><button type="button" class="secondary" data-mark-container-eaten="${this._safe(container.tag_id)}" data-container-name="${this._safe(label)}">Mark eaten</button></td>
+      </tr>
+    `;
+  }
+
+  _inventoryReadyMealUrgency(container = {}, status = {}) {
+    if (status.label) {
+      return status.label;
+    }
+    if (container.best_before_date) {
+      return `Best before ${this._relativeDateLabel(container.best_before_date)}`;
+    }
+    return "Ready to eat";
+  }
+
+  _inventoryReadyAgeBadge(container = {}, locationType = "") {
+    const status = this._inventoryReadyStorageStatus(container, locationType);
+    const age = this._inventoryReadyOutOfFreezerAge(container, locationType);
+    return `<span class="ready-age ${this._safe(status.klass)}" title="${this._safe(age.label)}"><ha-icon icon="mdi:snowflake-off"></ha-icon><strong>${this._safe(age.days)}</strong><span>${age.days === 1 ? "day" : "days"}</span></span>`;
+  }
+
+  _inventoryReadyOutOfFreezerAge(container = {}, locationType = "") {
+    if (locationType === "freezer") {
+      return { days: 0, label: "Still in freezer" };
+    }
+    const age = this._inventoryReadyStorageAge(container, locationType);
+    if (age) {
+      return { days: age.days, label: `Out of freezer for ${this._relativeDayCount(age.days)}` };
+    }
+    return { days: 0, label: "Out-of-freezer date unavailable" };
   }
 
   _isReadyToEatContainer(container = {}, locationType = "") {
@@ -3587,13 +3717,13 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const days = Math.round((bestBefore.getTime() - today.getTime()) / 86400000);
     let freshnessStatus = { rank: 0, label: "", klass: "", sortDate: String(container.best_before_date || "") };
     if (days < 0) {
-      freshnessStatus = { rank: 4, label: `Best before ${container.best_before_date} · overdue`, klass: "critical", sortDate: String(container.best_before_date || "") };
+      freshnessStatus = { rank: 4, label: `Best before ${this._relativeDateLabel(container.best_before_date)} · overdue`, klass: "critical", sortDate: String(container.best_before_date || "") };
     } else if (days <= 1) {
-      freshnessStatus = { rank: 3, label: `Best before ${container.best_before_date} · due now`, klass: "critical", sortDate: String(container.best_before_date || "") };
+      freshnessStatus = { rank: 3, label: `Best before ${this._relativeDateLabel(container.best_before_date)} · due now`, klass: "critical", sortDate: String(container.best_before_date || "") };
     } else if (days <= 3) {
-      freshnessStatus = { rank: 2, label: `Best before ${container.best_before_date} · ${days} days left`, klass: "warn", sortDate: String(container.best_before_date || "") };
+      freshnessStatus = { rank: 2, label: `Best before ${this._relativeDateLabel(container.best_before_date)} · ${this._relativeDayCount(days)} left`, klass: "warn", sortDate: String(container.best_before_date || "") };
     } else if (days <= 7) {
-      freshnessStatus = { rank: 1, label: `Best before ${container.best_before_date} · this week`, klass: "warn", sortDate: String(container.best_before_date || "") };
+      freshnessStatus = { rank: 1, label: `Best before ${this._relativeDateLabel(container.best_before_date)} · this week`, klass: "warn", sortDate: String(container.best_before_date || "") };
     }
     return storageStatus.rank > freshnessStatus.rank ? storageStatus : freshnessStatus;
   }
@@ -3630,7 +3760,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     return {
       date,
       days,
-      label: `Not in freezer for ${days} ${days === 1 ? "day" : "days"}`,
+      label: `Not in freezer for ${this._relativeDayCount(days)}`,
     };
   }
 
@@ -3706,12 +3836,123 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _inventoryLocationSummary(item) {
     const locations = Object.entries(item.locations || {});
     if (!locations.length) {
-      return "No location summary";
+      return "Locations: not tracked";
     }
-    return locations.map(([location, quantities]) => {
+    const summary = locations.map(([location, quantities]) => {
       const amount = Object.entries(quantities || {}).map(([unit, value]) => `${value} ${unit}`).join(" + ");
       return amount ? `${location}: ${amount}` : location;
     }).join(" · ");
+    return `Locations: ${summary}`;
+  }
+
+  _inventoryProductIdentity(item = {}) {
+    return [
+      item.item_id ? `ID ${item.item_id}` : "",
+      item.content_kind ? this._inventoryContentKindLabel(item.content_kind) : "",
+    ].filter(Boolean).join(" · ");
+  }
+
+  _inventoryPhysicalStockSummary(item = {}) {
+    const containers = (item.physical_containers || [])
+      .filter(Boolean)
+      .map((container) => {
+        return container.name || container.item_label || "Container";
+      });
+    if (containers.length) {
+      return `Containers: ${containers.join(", ")}`;
+    }
+    if (item.containers) {
+      return `Containers: ${item.containers} tracked`;
+    }
+    return "";
+  }
+
+  _inventoryProductFreshness(item = {}) {
+    const freshnessDates = item.freshness_dates || [];
+    const bestBeforeDates = [item.best_before_date, ...freshnessDates.map((entry) => entry.best_before_date)]
+      .filter(Boolean)
+      .sort((left, right) => String(left).localeCompare(String(right)));
+    const bestBefore = bestBeforeDates[0] || "";
+    const metadata = this._inventoryFreshnessMetadata(freshnessDates);
+    if (!bestBefore) {
+      return {
+        detail: metadata ? `Freshness: ${metadata}` : "",
+        pill: metadata ? "Dated stock" : "",
+        klass: "",
+      };
+    }
+    const status = this._inventoryBestBeforeStatus(bestBefore);
+    const parts = [`best before ${this._relativeDateLabel(bestBefore)}`, status.detail, metadata].filter(Boolean);
+    return {
+      detail: `Freshness: ${parts.join(" · ")}`,
+      pill: status.pill,
+      klass: status.klass,
+    };
+  }
+
+  _inventoryFreshnessMetadata(entries = []) {
+    const lines = [];
+    for (const entry of entries) {
+      const dated = [
+        entry.opened_date ? `opened ${this._relativeDateLabel(entry.opened_date)}` : "",
+        entry.purchased_date ? `purchased ${this._relativeDateLabel(entry.purchased_date)}` : "",
+        entry.price ? `price ${entry.price}` : "",
+      ].filter(Boolean).join(" · ");
+      if (dated) {
+        lines.push(`${entry.container || "Stock"}: ${dated}`);
+      }
+    }
+    return lines.join("; ");
+  }
+
+  _inventoryBestBeforeStatus(value) {
+    const bestBefore = this._parseInventoryDate(value);
+    if (!bestBefore) {
+      return { detail: "", pill: "Best before", klass: "" };
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    bestBefore.setHours(0, 0, 0, 0);
+    const days = Math.round((bestBefore.getTime() - today.getTime()) / 86400000);
+    if (days < 0) {
+      return { detail: "overdue", pill: "Overdue", klass: "critical" };
+    }
+    if (days === 0) {
+      return { detail: "due today", pill: "Due today", klass: "critical" };
+    }
+    if (days <= 3) {
+      return { detail: `${this._relativeDayCount(days)} left`, pill: "Use soon", klass: "warn" };
+    }
+    if (days <= 7) {
+      return { detail: "this week", pill: "This week", klass: "warn" };
+    }
+    return { detail: `${this._relativeDayCount(days)} left`, pill: "Dated stock", klass: "" };
+  }
+
+  _inventoryContentKindLabel(value) {
+    return { ingredient: "Ingredient", recipe: "Recipe batch", meal: "Ready meal", empty: "Empty" }[value] || String(value).replaceAll("_", " ");
+  }
+
+  _inventoryProductActions(item = {}) {
+    const actions = [];
+    if (this._inventoryAttentionForProduct(item)) {
+      actions.push(`<button type="button" class="secondary" data-open-tab="attention">Review</button>`);
+    }
+    if ((item.physical_containers || []).length) {
+      actions.push(`<button type="button" class="secondary" data-open-tab="storage">Storage</button>`);
+    }
+    if (item.item_id) {
+      actions.push(`<button type="button" class="secondary" data-queue-product="${this._safe(item.item_id)}" data-product-label="${this._safe(item.label)}">Queue</button>`);
+    }
+    return actions.join("");
+  }
+
+  _inventoryAttentionForProduct(item = {}) {
+    return (this._data?.product_attention || []).some((attention) => {
+      return [item.product_id, item.item_id, item.label].filter(Boolean).some((value) => {
+        return value === attention.product_id || value === attention.item_id || value === attention.label;
+      });
+    });
   }
 
   _inventoryLocationCount(items = []) {
@@ -3726,12 +3967,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
 
   _inventorySummaryPills(item) {
     const pills = [];
-    if (item.source) {
-      pills.push(this._inventorySourceLabel(item.source));
-    }
-    if (item.containers) {
-      pills.push(`${item.containers} stock records`);
-    }
     if (item.has_stock === false) {
       pills.push("Missing");
     }
@@ -3749,7 +3984,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           <p class="log-action">${this._safe(entry.action)}</p>
           <p class="muted subline">${this._safe(entry.message)}</p>
         </div>
-        <time class="log-time">${this._formatTime(entry.created_at)}</time>
+        <time class="log-time">${this._relativeDateTimeLabel(entry.created_at)}</time>
       </div>
     `;
   }
@@ -3760,7 +3995,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       ["Purchased", container.purchased_date],
       ["Opened", container.opened_date],
     ].filter(([, value]) => value);
-    return dates.map(([label, value]) => `${label}: ${this._safe(value)}`).join(" · ");
+    return dates.map(([label, value]) => `${label}: ${this._relativeDateLabel(value)}`).join(" · ");
   }
 
   _quantityNumber(container) {
@@ -3830,11 +4065,65 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     if (!value) {
       return "";
     }
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return this._safe(value);
+    return this._safe(this._relativeDateTimeLabel(value));
+  }
+
+  _relativeDatesInText(value) {
+    return String(value ?? "").replace(/\b\d{4}-\d{2}-\d{2}\b/g, (match) => this._relativeDateLabel(match));
+  }
+
+  _relativeDateLabel(value) {
+    const date = this._parseInventoryDate(value);
+    if (!date) {
+      return String(value || "");
     }
-    return this._safe(date.toLocaleString());
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    date.setHours(0, 0, 0, 0);
+    const days = Math.round((date.getTime() - today.getTime()) / 86400000);
+    if (days === 0) {
+      return "today";
+    }
+    if (days === 1) {
+      return "tomorrow";
+    }
+    if (days === -1) {
+      return "yesterday";
+    }
+    if (days > 0) {
+      return `in ${this._relativeDayCount(days)}`;
+    }
+    return `${this._relativeDayCount(Math.abs(days))} ago`;
+  }
+
+  _relativeDateTimeLabel(value) {
+    const date = this._parseInventoryDateTime(value);
+    if (!date) {
+      return String(value || "");
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const day = new Date(date);
+    day.setHours(0, 0, 0, 0);
+    const days = Math.round((day.getTime() - today.getTime()) / 86400000);
+    if (days === 0) {
+      return "today";
+    }
+    if (days === 1) {
+      return "tomorrow";
+    }
+    if (days === -1) {
+      return "yesterday";
+    }
+    if (days > 0) {
+      return `in ${this._relativeDayCount(days)}`;
+    }
+    return `${this._relativeDayCount(Math.abs(days))} ago`;
+  }
+
+  _relativeDayCount(days) {
+    const count = Math.abs(Number(days) || 0);
+    return `${count} ${count === 1 ? "day" : "days"}`;
   }
 
   _safe(value) {
