@@ -5,7 +5,20 @@ import vm from "node:vm";
 class FakeShadowRoot {
   innerHTML = "";
 
-  getElementById() {
+  getElementById(id) {
+    if (id === "edit-container-form" && this.innerHTML.includes('id="edit-container-form"')) {
+      return {
+        addEventListener() {},
+        elements: {
+          tag_id: { value: "demo:peas" },
+          name: { value: "Freezer bin" },
+          quantity: { value: "0" },
+          unit: { value: "bags" },
+          location_id: { value: "freezer" },
+          sublocation: { value: "Door bin" },
+        },
+      };
+    }
     return null;
   }
 
@@ -189,7 +202,7 @@ panel.hass = {
       empty: [],
       unassigned: [],
       stale: [],
-      location_at_risk: [],
+      location_at_risk: [{ label: "Fridge", detail: "warning", reason: "temperature above range", status: "warning" }],
     },
     planning_comparison: [{
       component: "sauce",
@@ -198,6 +211,90 @@ panel.hass = {
       proteins: [],
       grocy_stock: [{ label: "Tomatoes", quantity: "4 cans", containers: 1 }],
     }],
+    complete_meal_plan: {
+      meal_count: 2,
+      status: "ready",
+      complete: true,
+      uses: {
+        veggie: [
+          { label: "Roasted broccoli", quantity: 2, unit: "portions", family: "cruciferous", detail: "broccoli", location: "Fridge", sublocation: "Top shelf" },
+        ],
+        starch: [
+          { label: "Cooked basmati rice", quantity: 1, unit: "portions", family: "rice", detail: "basmati_rice", location: "Fridge", sublocation: "Top shelf" },
+          { label: "Sweet potatoes", quantity: 1, unit: "portions", family: "potato", detail: "sweet_potato", location: "Fridge", sublocation: "Top shelf" },
+        ],
+        protein: [
+          { label: "Chicken curry", quantity: 1, unit: "portions", family: "poultry", detail: "chicken", location: "Fridge", sublocation: "Top shelf" },
+          { label: "Salmon portions", quantity: 1, unit: "portions", family: "fish", detail: "salmon", location: "Freezer", sublocation: "Top shelf" },
+        ],
+      },
+      shortages: {},
+      skipped: [
+        { label: "Gram-counted pulled pork", role: "protein", unit: "g", reason: 'unit "g" is not portion-compatible' },
+      ],
+    },
+    meal_prep: {
+      status: "missing items",
+      meal_count: 2,
+      calendar_entities: [{
+        entity_id: "calendar.meal_prep",
+        name: "Meal Prep",
+        state: "off",
+      }],
+      calendar_events: [{
+        entity_id: "calendar.meal_prep",
+        name: "Meal Prep",
+        state: "on",
+        message: "Sunday prep",
+        start_time: "2026-06-21 10:00:00",
+        end_time: "2026-06-21 12:00:00",
+      }],
+      provider_roles: {
+        schedule: "Home Assistant calendar",
+        recipes: "Mealie",
+        stock: "Grocy",
+        shopping: "Grocy shopping list",
+        storage: "Grocy storage locations + Mise container tags",
+      },
+      storage_plan: [{
+        label: "Complete meal portions",
+        count: 2,
+        container_type: "medium square",
+        destination: "fridge",
+        eat_by: "next 3-4 days",
+        note: "One assembled meal per container",
+      }, {
+        label: "Protein staging",
+        count: 1,
+        container_type: "medium square",
+        destination: "fridge/freezer",
+        eat_by: "session dependent",
+        note: "Chicken curry",
+      }],
+      container_plan: [{
+        type: "medium square",
+        needed: 3,
+        available: 1,
+        missing: 2,
+        status: "missing",
+      }, {
+        type: "small bag",
+        needed: 0,
+        available: 2,
+        missing: 0,
+        status: "ready",
+      }],
+      clone_templates: [{
+        id: "current_complete_meals",
+        name: "2 complete meals",
+        source: "Mealie complete-meal preview",
+        keeps: ["recipes", "servings", "storage plan", "container plan", "checklist", "notes"],
+      }],
+      checklist: [
+        "Pick a Home Assistant calendar and schedule the prep block",
+        "Queue missing ingredients through Grocy or the configured shopping provider",
+      ],
+    },
     suggested_actions: [{
       id: "queue_empty_containers",
       title: "Queue empty containers",
@@ -216,6 +313,17 @@ panel.hass = {
         item_count: 1,
         reason: "empty_container_refill",
       },
+    }, {
+      id: "configure_mealie",
+      title: "Configure Mealie",
+      because: "Mealie provider is not configured.",
+      status: "warning",
+      service: "",
+      payload: {},
+      open_tab: "info",
+      sources: ["Configuration"],
+      target: "",
+      last_queued: null,
     }],
     shopping: {
       provider: "auto",
@@ -242,7 +350,13 @@ panel.hass = {
       prepared_inventory_at_risk: [],
     },
     empty_containers: [],
-    low_containers: [],
+    low_containers: [{
+      tag_id: "demo:sauce",
+      name: "Sauce tub",
+      item_label: "Tomato sauce",
+      quantity: 2,
+      unit: "cups",
+    }],
     dirty_containers: [],
     };
   },
@@ -272,17 +386,88 @@ assert.match(panel.shadowRoot.innerHTML, /Mise container/);
 assert.match(panel.shadowRoot.innerHTML, /Target: Grocy shopping list/);
 assert.match(panel.shadowRoot.innerHTML, /Last queued: 1 item/);
 assert.match(panel.shadowRoot.innerHTML, /Storage attention needed/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Shopping activity/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Add shopping item/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Shopping workflow/);
 panel._tab = "inventory";
 panel._render();
+assert.match(panel.shadowRoot.innerHTML, /Current inventory/);
+assert.match(panel.shadowRoot.innerHTML, /Stocked products/);
+assert.match(panel.shadowRoot.innerHTML, /Inventory sources/);
 assert.match(panel.shadowRoot.innerHTML, /Grocy stock/);
 assert.match(panel.shadowRoot.innerHTML, /Last stock write/);
-assert.match(panel.shadowRoot.innerHTML, /best before 2026-07-01/);
+assert.match(panel.shadowRoot.innerHTML, /Fridge: 2 cans/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Active containers/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Empty containers/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /best before 2026-07-01/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Sauce tub: 2 cups/);
 panel._tab = "planning";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Prepared components vs Grocy stock/);
 assert.match(panel.shadowRoot.innerHTML, /Tomatoes/);
 assert.match(panel.shadowRoot.innerHTML, /Prepared components/);
 assert.match(panel.shadowRoot.innerHTML, /mpa:component:sauce/);
+assert.match(panel.shadowRoot.innerHTML, /Complete meals/);
+assert.match(panel.shadowRoot.innerHTML, /2 complete meals ready/);
+assert.match(panel.shadowRoot.innerHTML, /Roasted broccoli/);
+assert.match(panel.shadowRoot.innerHTML, /cruciferous/);
+assert.match(panel.shadowRoot.innerHTML, /Chicken curry/);
+assert.match(panel.shadowRoot.innerHTML, /Gram-counted pulled pork/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Add shopping item/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Shopping activity/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Shopping workflow/);
+panel._tab = "meal-prep";
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /Meal Prep/);
+assert.match(panel.shadowRoot.innerHTML, /Home Assistant calendar/);
+assert.match(panel.shadowRoot.innerHTML, /calendar\.meal_prep/);
+assert.match(panel.shadowRoot.innerHTML, /Container readiness/);
+assert.match(panel.shadowRoot.innerHTML, /medium square/);
+assert.match(panel.shadowRoot.innerHTML, /Missing 2/);
+assert.match(panel.shadowRoot.innerHTML, /Storage plan/);
+assert.match(panel.shadowRoot.innerHTML, /Complete meal portions/);
+assert.match(panel.shadowRoot.innerHTML, /Clone session/);
+assert.match(panel.shadowRoot.innerHTML, /Use as base/);
+assert.match(panel.shadowRoot.innerHTML, /Home Assistant calendar/);
+assert.match(panel.shadowRoot.innerHTML, /Mealie/);
+assert.match(panel.shadowRoot.innerHTML, /Grocy/);
+panel._tab = "attention";
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /Needs user attention/);
+assert.match(panel.shadowRoot.innerHTML, /Kitchen and inventory issues only/);
+assert.match(panel.shadowRoot.innerHTML, /Queue empty containers/);
+assert.match(panel.shadowRoot.innerHTML, /Queue shopping/);
+assert.match(panel.shadowRoot.innerHTML, /Fridge/);
+assert.match(panel.shadowRoot.innerHTML, /Storage safety/);
+assert.match(panel.shadowRoot.innerHTML, /Sauce tub/);
+assert.match(panel.shadowRoot.innerHTML, /Container inventory/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Configure Mealie/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /not configured/);
+panel._tab = "meal-prep";
+panel._render();
+panel._clonePrepSession({ dataset: { templateName: "2 complete meals" } });
+assert.match(panel.shadowRoot.innerHTML, /value="Clone: 2 complete meals"/);
+const prepForm = {
+  elements: {
+    entity_id: { value: "calendar.meal_prep" },
+    summary: { value: "Clone: 2 complete meals" },
+    start_date_time: { value: "2026-06-21T10:00" },
+    end_date_time: { value: "2026-06-21T12:00" },
+    description: { value: "Created from test" },
+  },
+};
+await panel._createMealPrepCalendarEvent({ preventDefault() {}, currentTarget: prepForm });
+assert.deepEqual(serviceCalls.at(-1), {
+  domain: "calendar",
+  service: "create_event",
+  data: {
+    entity_id: "calendar.meal_prep",
+    summary: "Clone: 2 complete meals",
+    start_date_time: "2026-06-21T10:00",
+    end_date_time: "2026-06-21T12:00",
+    description: "Created from test",
+  },
+});
 panel._tab = "info";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Catalog: DEV/);
@@ -318,9 +503,10 @@ assert.match(panel.shadowRoot.innerHTML, /title="Add container here" aria-label=
 assert.match(panel.shadowRoot.innerHTML, /data-add-container-location="fridge"/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /location-card-actions"><button class="icon-button" data-add-container-location/);
 assert.match(panel.shadowRoot.innerHTML, /title="Edit location" aria-label="Edit location"/);
-assert.match(panel.shadowRoot.innerHTML, /class="icon-select" title="Move container"/);
 assert.match(panel.shadowRoot.innerHTML, /ha-icon icon="mdi:map-marker-right-outline"/);
-assert.match(panel.shadowRoot.innerHTML, /data-move-tag="demo:sauce" aria-label="Move container"/);
+assert.match(panel.shadowRoot.innerHTML, /data-open-move-container="demo:sauce" data-current-location="fridge" title="Move container" aria-label="Move container"/);
+assert.match(panel.shadowRoot.innerHTML, /title="Edit container" aria-label="Edit container"/);
+assert.match(panel.shadowRoot.innerHTML, /data-edit-container="demo:sauce"/);
 assert.match(panel.shadowRoot.innerHTML, /<span class="location-chip"><ha-icon icon="mdi:fridge-outline"><\/ha-icon><span class="location-type">fridge<\/span><\/span>/);
 assert.match(panel.shadowRoot.innerHTML, /<span class="location-chip"><ha-icon icon="mdi:silverware-fork-knife"><\/ha-icon><span>Kitchen<\/span><\/span>/);
 assert.match(panel.shadowRoot.innerHTML, /<span>Status<\/span><strong>Storage automation clear<\/strong>/);
@@ -348,6 +534,27 @@ assert.doesNotMatch(panel.shadowRoot.innerHTML, /Storage monitoring not configur
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Catalog: DEV/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Catalog size/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /<h2>Containers<\/h2>/);
+panel._openContainerMove("demo:sauce", "fridge");
+assert.match(panel.shadowRoot.innerHTML, /id="move-container-form"/);
+assert.match(panel.shadowRoot.innerHTML, /id="move-container-location" required><option value="">Choose a location<\/option><option value="fridge" selected>Fridge<\/option>/);
+assert.match(panel.shadowRoot.innerHTML, /<label>Sublocation<select name="sublocation"><option value="Top shelf" selected>Top shelf<\/option><\/select><\/label>/);
+const moveForm = {
+  elements: {
+    tag_id: { value: "demo:sauce" },
+    location_id: { value: "freezer" },
+    sublocation: { value: "Door bin" },
+  },
+};
+await panel._saveContainerMove({ preventDefault() {}, currentTarget: moveForm });
+assert.deepEqual(serviceCalls.at(-1), {
+  domain: "mise_en_place_assistant",
+  service: "move_container",
+  data: {
+    tag_id: "demo:sauce",
+    location_id: "freezer",
+    sublocation: "Door bin",
+  },
+});
 panel._openCreateContainer("freezer");
 assert.match(panel.shadowRoot.innerHTML, /<option value="freezer" selected>Freezer<\/option>/);
 assert.match(panel.shadowRoot.innerHTML, /class="card location-card type-freezer selected"/);
@@ -362,11 +569,47 @@ assert.match(panel.shadowRoot.innerHTML, /Door bin · 1 container/);
 assert.match(panel.shadowRoot.innerHTML, /Frozen peas/);
 assert.match(panel.shadowRoot.innerHTML, /Freezer bin/);
 assert.match(panel.shadowRoot.innerHTML, /Freezer \/ Door bin/);
+assert.match(panel.shadowRoot.innerHTML, /Tracked/);
+assert.match(panel.shadowRoot.innerHTML, /title="Mark physical container deleted" aria-label="Mark physical container deleted"/);
 assert.match(panel.shadowRoot.innerHTML, /Empty/);
-assert.match(panel.shadowRoot.innerHTML, /title="Archive container" aria-label="Archive container"/);
+panel._openContainerEdit("demo:peas");
+assert.match(panel.shadowRoot.innerHTML, /id="edit-container-form"/);
+assert.match(panel.shadowRoot.innerHTML, /value="demo:peas" readonly/);
+assert.match(panel.shadowRoot.innerHTML, /name="name" value="Freezer bin"/);
+assert.match(panel.shadowRoot.innerHTML, /name="quantity" required type="number" min="0" step="any" value="0"/);
+const editForm = {
+  elements: {
+    tag_id: { value: "demo:peas" },
+    name: { value: "Freezer door bin" },
+    quantity: { value: "3" },
+    unit: { value: "bags" },
+    location_id: { value: "freezer" },
+    sublocation: { value: "Door bin" },
+    best_before_date: { value: "" },
+    purchased_date: { value: "" },
+    opened_date: { value: "" },
+  },
+};
+await panel._saveContainerEdit({ preventDefault() {}, currentTarget: editForm });
+assert.deepEqual(serviceCalls.at(-1), {
+  domain: "mise_en_place_assistant",
+  service: "update_container",
+  data: {
+    tag_id: "demo:peas",
+    quantity: 3,
+    name: "Freezer door bin",
+    unit: "bags",
+    location_id: "freezer",
+    sublocation: "Door bin",
+  },
+});
 panel._tab = "dev";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Simulate CRUD/);
+assert.match(panel.shadowRoot.innerHTML, /Shopping workflow/);
+assert.match(panel.shadowRoot.innerHTML, /Add shopping item/);
+assert.match(panel.shadowRoot.innerHTML, /Shopping activity/);
+assert.match(panel.shadowRoot.innerHTML, /data-sync-missing-products/);
 await panel._simulateCrud();
 assert.deepEqual(serviceCalls.at(-1), {
   domain: "mise_en_place_assistant",

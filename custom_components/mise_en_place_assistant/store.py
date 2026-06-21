@@ -47,6 +47,9 @@ from .const import (
     SHOPPING_LIST_PROVIDER_AUTO,
     LOCATION_TYPES,
     PRODUCT_CONTAINER_POLICIES,
+    PRODUCT_MEAL_COMPONENT_FAMILIES,
+    PRODUCT_MEAL_COMPONENT_ROLES,
+    PRODUCT_MEAL_PORTION_UNITS,
     PRODUCT_MEAL_ROLES,
     PRODUCT_STORAGE_BEHAVIORS,
     VOID_LOCATION_ID,
@@ -90,6 +93,20 @@ PROTEIN_GROUP_ALIASES = {
     "veal": "red meat",
     "vegetarian": "vegetarian",
     "venison": "red meat",
+}
+PROTEIN_FAMILY_ALIASES = {
+    **PROTEIN_GROUP_ALIASES,
+    "red meat": "red_meat",
+    "red-meat": "red_meat",
+    "red_meat": "red_meat",
+}
+COMPONENT_ROLE_ALIASES = {
+    "vegetable": "veggie",
+    "vegetables": "veggie",
+    "veggie": "veggie",
+    "veggies": "veggie",
+    "starch": "starch",
+    "protein": "protein",
 }
 
 
@@ -227,8 +244,12 @@ class MiseEnPlaceAssistantInventory:
             if "content_kind" not in container:
                 container["content_kind"] = "ingredient" if container.get("item_id") else None
                 changed = True
-            if "archived" not in container:
-                container["archived"] = False
+            if container.get("archived") is True and container.get("state") != "deleted":
+                container["state"] = "deleted"
+                container["deleted_at"] = container.get("archived_at") or container.get("updated_at") or _utc_now()
+                changed = True
+            elif container.get("state") is None:
+                container["state"] = "active"
                 changed = True
             if not container.get("tag_id"):
                 container["tag_id"] = tag_id
@@ -236,7 +257,7 @@ class MiseEnPlaceAssistantInventory:
             if not container.get("name"):
                 container["name"] = self.default_container_name(tag_id)
                 changed = True
-            if "state" in container:
+            if container.get("state") not in (None, "active", "deleted"):
                 container.pop("state")
                 changed = True
             if "created_at" not in container:
@@ -306,8 +327,8 @@ class MiseEnPlaceAssistantInventory:
         return self.data.setdefault("containers", {})
 
     def active_containers(self) -> list[dict[str, Any]]:
-        """Return containers that remain in active rotation."""
-        return [container for container in self.containers.values() if not container.get("archived")]
+        """Return containers currently tracked by Mise inventory."""
+        return [container for container in self.containers.values() if container.get("state") != "deleted"]
 
     @property
     def items(self) -> dict[str, dict[str, Any]]:
@@ -454,16 +475,24 @@ class MiseEnPlaceAssistantInventory:
         now = _utc_now()
         changed = False
         reviewed = {
-            "mocked:baby-spinach": ("original_packaging", "fridge", "ingredient", True),
-            "mocked:eggs": ("original_packaging", "fridge", "staple", True),
-            "mocked:basmati-rice": ("container", "pantry", "staple", True),
-            "mocked:coffee": ("container", "pantry", "staple", False),
-            "mocked:frozen-peas": ("original_packaging", "freezer", "ingredient", True),
-            "mocked:olive-oil": ("original_packaging", "pantry", "condiment", True),
-            "mocked:soy-sauce": ("original_packaging", "pantry", "condiment", True),
-            "mocked:bananas": ("no_container", "counter", "ignore", False),
+            "mocked:baby-spinach": ("original_packaging", "fridge", "ingredient", True, "ignore", "unknown", ""),
+            "mocked:eggs": ("original_packaging", "fridge", "staple", True, "ignore", "unknown", ""),
+            "mocked:basmati-rice": ("container", "pantry", "staple", True, "ignore", "unknown", ""),
+            "mocked:coffee": ("container", "pantry", "staple", False, "ignore", "unknown", ""),
+            "mocked:frozen-peas": ("original_packaging", "freezer", "ingredient", True, "ignore", "unknown", ""),
+            "mocked:olive-oil": ("original_packaging", "pantry", "condiment", True, "ignore", "unknown", ""),
+            "mocked:soy-sauce": ("original_packaging", "pantry", "condiment", True, "ignore", "unknown", ""),
+            "mocked:bananas": ("no_container", "counter", "ignore", False, "ignore", "unknown", ""),
         }
-        for item_id, (container_policy, storage_behavior, meal_role, available_in_mealie) in reviewed.items():
+        for item_id, (
+            container_policy,
+            storage_behavior,
+            meal_role,
+            available_in_mealie,
+            meal_component_role,
+            meal_component_family,
+            meal_component_detail,
+        ) in reviewed.items():
             if item_id in self.product_metadata:
                 continue
             self.product_metadata[item_id] = {
@@ -471,6 +500,9 @@ class MiseEnPlaceAssistantInventory:
                 "container_policy": container_policy,
                 "storage_behavior": storage_behavior,
                 "meal_role": meal_role,
+                "meal_component_role": meal_component_role,
+                "meal_component_family": meal_component_family,
+                "meal_component_detail": meal_component_detail,
                 "available_in_mealie": available_in_mealie,
                 "created_at": now,
                 "updated_at": now,
@@ -697,6 +729,8 @@ class MiseEnPlaceAssistantInventory:
                 reasons.append("Storage behavior not selected")
             if metadata.get("meal_role", "unknown") == "unknown":
                 reasons.append("Meal role not selected")
+            if metadata.get("meal_component_role", "unknown") == "unknown":
+                reasons.append("Complete meal role not selected")
             if "available_in_mealie" not in metadata:
                 reasons.append("Mealie availability not selected")
             if not reasons:
@@ -713,6 +747,9 @@ class MiseEnPlaceAssistantInventory:
                         "container_policy": metadata.get("container_policy", "unknown"),
                         "storage_behavior": metadata.get("storage_behavior", "unknown"),
                         "meal_role": metadata.get("meal_role", "unknown"),
+                        "meal_component_role": metadata.get("meal_component_role", "unknown"),
+                        "meal_component_family": metadata.get("meal_component_family", "unknown"),
+                        "meal_component_detail": metadata.get("meal_component_detail", ""),
                         "available_in_mealie": bool(metadata.get("available_in_mealie", False)),
                         "available_in_mealie_set": "available_in_mealie" in metadata,
                         "reviewed_at": metadata.get("reviewed_at", ""),
@@ -732,6 +769,9 @@ class MiseEnPlaceAssistantInventory:
         container_policy: str = "unknown",
         storage_behavior: str = "unknown",
         meal_role: str = "unknown",
+        meal_component_role: str = "unknown",
+        meal_component_family: str = "unknown",
+        meal_component_detail: str = "",
         available_in_mealie: bool | None = None,
     ) -> dict[str, Any]:
         """Store HA-owned Mise workflow hints for a provider product."""
@@ -749,6 +789,17 @@ class MiseEnPlaceAssistantInventory:
             raise ValueError("Unsupported storage behavior")
         if meal_role not in PRODUCT_MEAL_ROLES:
             raise ValueError("Unsupported meal role")
+        meal_component_role = self._normalize_component_role(meal_component_role)
+        meal_component_family = self._normalize_component_family(meal_component_family)
+        meal_component_detail = self._normalize_component_detail(meal_component_detail)
+        if meal_component_role not in PRODUCT_MEAL_COMPONENT_ROLES:
+            raise ValueError("Unsupported complete meal role")
+        if meal_component_family not in PRODUCT_MEAL_COMPONENT_FAMILIES:
+            raise ValueError("Unsupported complete meal family")
+        if meal_component_role in {"veggie", "starch", "protein"}:
+            unit = str(item.get("unit") or DEFAULT_UNIT)
+            if not self._is_portion_unit(unit):
+                raise ValueError("Complete meal components must use a portion-compatible unit")
         now = _utc_now()
         current = self.product_metadata.get(item_id, {})
         sync_result: dict[str, int] | None = None
@@ -757,6 +808,9 @@ class MiseEnPlaceAssistantInventory:
             "container_policy": container_policy,
             "storage_behavior": storage_behavior,
             "meal_role": meal_role,
+            "meal_component_role": meal_component_role,
+            "meal_component_family": meal_component_family,
+            "meal_component_detail": meal_component_detail,
             "available_in_mealie": bool(available_in_mealie),
             "created_at": current.get("created_at", now),
             "updated_at": now,
@@ -779,6 +833,9 @@ class MiseEnPlaceAssistantInventory:
                 "container_policy": container_policy,
                 "storage_behavior": storage_behavior,
                 "meal_role": meal_role,
+                "meal_component_role": meal_component_role,
+                "meal_component_family": meal_component_family,
+                "meal_component_detail": meal_component_detail,
                 "available_in_mealie": bool(available_in_mealie),
                 "mealie_sync": sync_result,
             },
@@ -1365,14 +1422,13 @@ class MiseEnPlaceAssistantInventory:
         )
         candidate = {
             "tag_id": tag_id,
+            "state": "active",
             "name": self._normalize_optional(name) or old.get("name") or self.default_container_name(tag_id),
             "item_id": item_id,
             "item_label": item_label,
             "item_format": item_format,
             "product_id": product_id,
             "content_kind": content_kind,
-            "archived": False,
-            "archived_at": None,
             **quantity_data,
             "location": location,
             "location_id": resolved_location["id"],
@@ -1391,6 +1447,7 @@ class MiseEnPlaceAssistantInventory:
                 candidate[key] = value
             elif key in old:
                 candidate[key] = old[key]
+        candidate.pop("deleted_at", None)
         await self._async_apply_grocy_stock_replacement(old, candidate)
         self.containers[tag_id] = candidate
         if is_new:
@@ -1409,10 +1466,49 @@ class MiseEnPlaceAssistantInventory:
     def _recipe_classification(recipe: dict[str, Any]) -> dict[str, str]:
         tags = {str(tag).casefold() for tag in recipe.get("tags", [])}
         component = next((tag[14:] for tag in tags if tag.startswith("mpa:component:")), None)
+        component_role = MiseEnPlaceAssistantInventory._normalize_component_role(component)
         protein = next((tag[20:] for tag in tags if tag.startswith("mpa:primary-protein:")), None)
         if protein:
             protein = PROTEIN_GROUP_ALIASES.get(protein, protein)
-        return {key: value for key, value in {"component": component, "primary_protein": protein}.items() if value}
+        protein_family = MiseEnPlaceAssistantInventory._normalize_component_family(protein)
+        component_family = next((tag[21:] for tag in tags if tag.startswith("mpa:component-family:")), None)
+        component_detail = next((tag[21:] for tag in tags if tag.startswith("mpa:component-detail:")), None)
+        detail = next((tag[19:] for tag in tags if tag.startswith("mpa:protein-detail:")), component_detail)
+        return {
+            key: value
+            for key, value in {
+                "component": component,
+                "primary_protein": protein,
+                "meal_component_role": component_role if component_role != "unknown" else "",
+                "meal_component_family": (
+                    protein_family
+                    if protein_family != "unknown"
+                    else MiseEnPlaceAssistantInventory._normalize_component_family(component_family)
+                ),
+                "meal_component_detail": MiseEnPlaceAssistantInventory._normalize_component_detail(detail),
+            }.items()
+            if value
+        }
+
+    @staticmethod
+    def _normalize_component_role(value: Any) -> str:
+        normalized = str(value or "unknown").strip().casefold().replace("-", "_").replace(" ", "_")
+        return COMPONENT_ROLE_ALIASES.get(normalized, normalized or "unknown")
+
+    @staticmethod
+    def _normalize_component_family(value: Any) -> str:
+        normalized = str(value or "unknown").strip().casefold().replace("-", "_").replace(" ", "_")
+        normalized = PROTEIN_FAMILY_ALIASES.get(normalized, normalized)
+        normalized = str(normalized or "unknown").replace(" ", "_").replace("-", "_")
+        return normalized or "unknown"
+
+    @staticmethod
+    def _normalize_component_detail(value: Any) -> str:
+        return str(value or "").strip().casefold().replace(" ", "_").replace("-", "_")
+
+    @staticmethod
+    def _is_portion_unit(unit: Any) -> bool:
+        return str(unit or "").strip().casefold() in PRODUCT_MEAL_PORTION_UNITS
 
     async def async_create_recipe_container(
         self, *, recipe_id: str, content_kind: str, tag_id: str, name: str | None = None,
@@ -1448,6 +1544,10 @@ class MiseEnPlaceAssistantInventory:
             ("demo:curry", "Curry portions", "mocked:recipe:chicken-curry", 3, "Fridge", "Top shelf", "meal"),
             ("demo:vegetables", "Roast vegetables", "mocked:recipe:roast-vegetables", 4, "Fridge", "Top shelf", "meal"),
             ("demo:meal-rice", "Cooked rice", "mocked:recipe:rice", 1, "Fridge", "Top shelf", "meal"),
+            ("demo:broccoli", "Roasted broccoli", "mocked:recipe:broccoli", 2, "Fridge", "Top shelf", "meal"),
+            ("demo:sweet-potatoes", "Sweet potatoes", "mocked:recipe:sweet-potatoes", 3, "Fridge", "Top shelf", "meal"),
+            ("demo:salmon", "Salmon portions", "mocked:recipe:salmon", 2, "Freezer", "Top shelf", "meal"),
+            ("demo:noodles", "Sesame noodles", "mocked:recipe:noodles", 2, "Fridge", "Top shelf", "meal"),
             ("demo:lentil-loaf", "Lentil loaf", "mocked:recipe:lentil-loaf", 0, "Freezer", "Top shelf", "recipe"),
         )
         created = 0
@@ -1484,6 +1584,10 @@ class MiseEnPlaceAssistantInventory:
             "demo:curry": "Top shelf",
             "demo:vegetables": "Top shelf",
             "demo:meal-rice": "Top shelf",
+            "demo:broccoli": "Top shelf",
+            "demo:sweet-potatoes": "Top shelf",
+            "demo:salmon": "Top shelf",
+            "demo:noodles": "Top shelf",
             "demo:lentil-loaf": "Top shelf",
         }
         changed = False
@@ -1566,8 +1670,8 @@ class MiseEnPlaceAssistantInventory:
             await self._async_create_container(tag_id=tag_id)
 
         container = self.containers[tag_id]
-        if container.get("archived"):
-            raise ValueError("Restore the container before updating it")
+        if container.get("state") == "deleted":
+            raise ValueError("Cannot update a deleted container")
         before = dict(container)
         candidate = dict(container)
         display_unit = unit if unit is not None else candidate.get("display_unit", candidate.get("unit", DEFAULT_UNIT))
@@ -1655,38 +1759,58 @@ class MiseEnPlaceAssistantInventory:
         self._ensure_write_mode(allow_dev_inventory=True)
         await self._async_update_container(tag_id=tag_id, quantity=0)
 
-    async def async_archive_container(self, tag_id: str) -> None:
-        """Retire an empty container from active inventory without deleting history."""
+    async def async_delete_container(self, tag_id: str) -> None:
+        """Mark a damaged, lost, or discarded physical container as deleted."""
         self._ensure_write_mode(allow_dev_inventory=True)
         tag_id = self._normalize_tag_id(tag_id)
         if tag_id not in self.containers:
             raise KeyError(tag_id)
         container = self.containers[tag_id]
-        if container.get("archived"):
+        before = dict(container)
+        display_unit = container.get("display_unit", container.get("unit", DEFAULT_UNIT))
+        now = _utc_now()
+        candidate = {
+            **container,
+            **normalize_quantity(0, display_unit),
+            "state": "deleted",
+            "deleted_at": now,
+            "updated_at": now,
+        }
+        await self._async_apply_grocy_stock_replacement(before, candidate)
+        self.containers[tag_id] = candidate
+        self._add_log_entry(
+            "Container deleted",
+            f"{candidate.get('name') or self.default_container_name(tag_id)} was marked deleted.",
+            {"tag_id": tag_id, "product": self.product_snapshot(candidate)},
+        )
+        await self.async_save()
+
+    async def async_archive_container(self, tag_id: str) -> None:
+        """Compatibility alias for retiring an empty container from active inventory."""
+        tag_id = self._normalize_tag_id(tag_id)
+        if tag_id not in self.containers:
+            raise KeyError(tag_id)
+        container = self.containers[tag_id]
+        if container.get("state") == "deleted":
             return
         if float(container.get("canonical_quantity", container.get("quantity", 0)) or 0) > 0:
             raise ValueError("Clear the container before archiving it")
-        now = _utc_now()
-        container["archived"] = True
-        container["archived_at"] = now
-        container["updated_at"] = now
-        self._add_log_entry("Container archived", f"{container['name']} was removed from active rotation.", {"tag_id": tag_id})
-        await self.async_save()
+        await self.async_delete_container(tag_id)
 
     async def async_restore_container(self, tag_id: str) -> None:
-        """Return an archived container to active rotation."""
+        """Compatibility alias for returning a retired empty container to active inventory."""
         self._ensure_write_mode(allow_dev_inventory=True)
         tag_id = self._normalize_tag_id(tag_id)
         if tag_id not in self.containers:
             raise KeyError(tag_id)
         container = self.containers[tag_id]
-        if not container.get("archived"):
+        if container.get("state") != "deleted":
             return
         now = _utc_now()
-        container["archived"] = False
+        container["state"] = "active"
         container["restored_at"] = now
         container["updated_at"] = now
-        self._add_log_entry("Container restored", f"{container['name']} returned to active rotation.", {"tag_id": tag_id})
+        self._add_log_entry("Container restored", f"{container['name']} returned to active tracking.", {"tag_id": tag_id})
         await self.async_save()
 
     async def async_simulate_crud(self) -> dict[str, Any]:
@@ -1753,16 +1877,14 @@ class MiseEnPlaceAssistantInventory:
         steps.append("container.update")
         await self.async_clear_container(tag_id)
         steps.append("container.clear")
-        await self.async_archive_container(tag_id)
-        steps.append("container.archive")
-        await self.async_restore_container(tag_id)
-        steps.append("container.restore")
         await self.async_update_container(
             tag_id=tag_id,
             location_id=base_location["id"],
             sublocation="",
         )
         steps.append("container.move")
+        await self.async_delete_container(tag_id)
+        steps.append("container.delete")
         await self.async_delete_location(location_id)
         steps.append("location.delete")
 
@@ -2080,6 +2202,144 @@ class MiseEnPlaceAssistantInventory:
             recipe_totals = entry["recipes"].setdefault(label, {})
             recipe_totals[unit] = recipe_totals.get(unit, 0) + amount
         return {"components": sorted(components.values(), key=lambda entry: entry["component"])}
+
+    def complete_meal_plan(self, meal_count: int | float = 1) -> dict[str, Any]:
+        """Preview source containers for complete meals without mutating inventory."""
+        try:
+            requested = int(float(meal_count))
+        except (TypeError, ValueError) as err:
+            raise ValueError("meal_count must be a positive whole number") from err
+        if requested <= 0 or requested != float(meal_count):
+            raise ValueError("meal_count must be a positive whole number")
+
+        groups: dict[str, list[dict[str, Any]]] = {"veggie": [], "starch": [], "protein": []}
+        skipped: list[dict[str, Any]] = []
+        for container in self.active_containers():
+            amount = self._container_amount(container)
+            if amount <= 0:
+                continue
+            unit = container.get("canonical_unit", container.get("unit")) or DEFAULT_UNIT
+            classification = self._container_meal_classification(container)
+            role = classification.get("meal_component_role", "unknown")
+            if role not in groups:
+                continue
+            if not self._is_portion_unit(unit):
+                skipped.append(
+                    {
+                        "tag_id": container.get("tag_id"),
+                        "label": self.item_label_for_container(container),
+                        "role": role,
+                        "unit": unit,
+                        "reason": f'unit "{unit}" is not portion-compatible',
+                    }
+                )
+                continue
+            groups[role].append(
+                {
+                    "tag_id": container.get("tag_id"),
+                    "name": container.get("name") or self.default_container_name(container.get("tag_id", "")),
+                    "label": self.item_label_for_container(container),
+                    "role": role,
+                    "family": classification.get("meal_component_family", "unknown"),
+                    "detail": classification.get("meal_component_detail", ""),
+                    "available": amount,
+                    "unit": unit,
+                    "location": container.get("location") or "",
+                    "location_id": container.get("location_id") or "",
+                    "sublocation": container.get("sublocation") or "",
+                    "best_before_date": container.get("best_before_date") or "",
+                    "opened_date": container.get("opened_date") or "",
+                    "updated_at": container.get("updated_at") or "",
+                }
+            )
+
+        uses: dict[str, list[dict[str, Any]]] = {}
+        shortages: dict[str, dict[str, Any]] = {}
+        for role, candidates in groups.items():
+            selected, shortage = self._select_meal_component_sources(candidates, requested)
+            uses[role] = selected
+            if shortage > 0:
+                shortages[role] = {
+                    "needed": requested,
+                    "available": requested - shortage,
+                    "missing": shortage,
+                }
+
+        return {
+            "meal_count": requested,
+            "status": "ready" if not shortages else "short",
+            "complete": not shortages,
+            "uses": uses,
+            "shortages": shortages,
+            "skipped": skipped,
+            "rules": [
+                "1 veggie portion, 1 starch portion, and 1 protein portion per meal",
+                "Preview only: inventory is not moved or consumed",
+                "Only portion-compatible units are eligible",
+            ],
+        }
+
+    def _container_meal_classification(self, container: dict[str, Any]) -> dict[str, str]:
+        """Return normalized complete-meal classification for a container."""
+        product = self.product_for_container(container) or {}
+        source_id = (product.get("source") or {}).get("id") or container.get("item_id")
+        metadata = self.product_metadata.get(str(source_id), {}) if source_id else {}
+        product_classification = product.get("classification") or {}
+        role = self._normalize_component_role(
+            metadata.get("meal_component_role")
+            or product_classification.get("meal_component_role")
+            or product_classification.get("component")
+        )
+        family = self._normalize_component_family(
+            metadata.get("meal_component_family")
+            or product_classification.get("meal_component_family")
+            or product_classification.get("primary_protein")
+        )
+        detail = self._normalize_component_detail(
+            metadata.get("meal_component_detail")
+            or product_classification.get("meal_component_detail")
+            or product.get("label")
+            or container.get("item_label")
+        )
+        return {
+            "meal_component_role": role,
+            "meal_component_family": family,
+            "meal_component_detail": detail,
+        }
+
+    @staticmethod
+    def _container_amount(container: dict[str, Any]) -> float:
+        try:
+            return float(container.get("canonical_quantity", container.get("quantity", 0)) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _select_meal_component_sources(
+        candidates: list[dict[str, Any]],
+        needed: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        remaining = needed
+        selected: list[dict[str, Any]] = []
+        ordered = sorted(
+            candidates,
+            key=lambda candidate: (
+                candidate.get("best_before_date") or "9999-12-31",
+                0 if candidate.get("opened_date") else 1,
+                candidate.get("available", 0),
+                candidate.get("updated_at") or "",
+                candidate.get("label") or "",
+            ),
+        )
+        for candidate in ordered:
+            if remaining <= 0:
+                break
+            take = min(float(candidate["available"]), float(remaining))
+            if take <= 0:
+                continue
+            selected.append({**candidate, "quantity": int(take) if take.is_integer() else take})
+            remaining -= int(take) if take.is_integer() else take
+        return selected, int(remaining) if float(remaining).is_integer() else remaining
 
     def _resolve_product_id(self, item_id: str | None, label: str | None, item_format: str | None,
                             unit: str | None, source_provider: str = "local",

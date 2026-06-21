@@ -24,6 +24,7 @@ from .const import (
     DEFAULT_M5DIAL_SERVICE_PREFIX,
     DOMAIN,
     EVENT_MISE_EN_PLACE_ASSISTANT_CREATE_CONTAINER,
+    EVENT_MISE_EN_PLACE_ASSISTANT_COMPLETE_MEAL_PLAN,
     EVENT_MISE_EN_PLACE_ASSISTANT_SCAN,
     EVENT_MISE_EN_PLACE_ASSISTANT_UPDATE_CONTAINER,
     EVENT_INVENTORY_CONFIRM,
@@ -31,9 +32,11 @@ from .const import (
     SERVICE_CREATE_CONTAINER,
     SERVICE_ARCHIVE_CONTAINER,
     SERVICE_CLEAR_CONTAINER,
+    SERVICE_DELETE_CONTAINER,
     SERVICE_ADD_EMPTY_CONTAINERS_TO_SHOPPING_LIST,
     SERVICE_ADD_MISSING_PRODUCTS_TO_SHOPPING_LIST,
     SERVICE_ADD_TO_SHOPPING_LIST,
+    SERVICE_PLAN_COMPLETE_MEALS,
     SERVICE_UPDATE_PRODUCT_METADATA,
     SERVICE_CREATE_RECIPE_CONTAINER,
     SERVICE_CREATE_LOCATION,
@@ -49,6 +52,8 @@ from .const import (
     PROVIDER_MOCKED,
     LOCATION_TYPES,
     PRODUCT_CONTAINER_POLICIES,
+    PRODUCT_MEAL_COMPONENT_FAMILIES,
+    PRODUCT_MEAL_COMPONENT_ROLES,
     PRODUCT_MEAL_ROLES,
     PRODUCT_STORAGE_BEHAVIORS,
     VOID_LOCATION_ID,
@@ -86,6 +91,10 @@ ATTR_PRICE = "price"
 ATTR_CONTAINER_POLICY = "container_policy"
 ATTR_STORAGE_BEHAVIOR = "storage_behavior"
 ATTR_MEAL_ROLE = "meal_role"
+ATTR_MEAL_COMPONENT_ROLE = "meal_component_role"
+ATTR_MEAL_COMPONENT_FAMILY = "meal_component_family"
+ATTR_MEAL_COMPONENT_DETAIL = "meal_component_detail"
+ATTR_MEAL_COUNT = "meal_count"
 ATTR_AVAILABLE_IN_MEALIE = "available_in_mealie"
 ATTR_REQUEST_ID = "request_id"
 ATTR_SOURCE_PROVIDER = "source_provider"
@@ -205,6 +214,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async def handle_clear_container(call: ServiceCall) -> None:
         try:
             await _manager(hass).async_clear_container(call.data[ATTR_TAG_ID])
+        except (KeyError, ValueError) as err:
+            raise ServiceValidationError(
+                f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
+            ) from err
+
+    async def handle_delete_container(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_delete_container(call.data[ATTR_TAG_ID])
         except (KeyError, ValueError) as err:
             raise ServiceValidationError(
                 f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
@@ -397,7 +415,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async def handle_add_missing_products_to_shopping_list(call: ServiceCall) -> None:
         try:
             await _manager(hass).async_add_missing_products_to_shopping_list()
-        except ValueError as err:
+        except (MealieCatalogError, ValueError) as err:
             raise ServiceValidationError(str(err)) from err
 
     async def handle_update_product_metadata(call: ServiceCall) -> None:
@@ -407,10 +425,20 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 container_policy=call.data.get(ATTR_CONTAINER_POLICY, "unknown"),
                 storage_behavior=call.data.get(ATTR_STORAGE_BEHAVIOR, "unknown"),
                 meal_role=call.data.get(ATTR_MEAL_ROLE, "unknown"),
+                meal_component_role=call.data.get(ATTR_MEAL_COMPONENT_ROLE, "unknown"),
+                meal_component_family=call.data.get(ATTR_MEAL_COMPONENT_FAMILY, "unknown"),
+                meal_component_detail=call.data.get(ATTR_MEAL_COMPONENT_DETAIL, ""),
                 available_in_mealie=call.data.get(ATTR_AVAILABLE_IN_MEALIE),
             )
         except (MealieCatalogError, ValueError) as err:
             raise ServiceValidationError(str(err)) from err
+
+    async def handle_plan_complete_meals(call: ServiceCall) -> None:
+        try:
+            plan = _manager(hass).complete_meal_plan(call.data.get(ATTR_MEAL_COUNT, 1))
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        hass.bus.async_fire(EVENT_MISE_EN_PLACE_ASSISTANT_COMPLETE_MEAL_PLAN, plan)
 
     hass.services.async_register(
         DOMAIN,
@@ -465,6 +493,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         DOMAIN,
         SERVICE_CLEAR_CONTAINER,
         handle_clear_container,
+        schema=vol.Schema({vol.Required(ATTR_TAG_ID): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_DELETE_CONTAINER,
+        handle_delete_container,
         schema=vol.Schema({vol.Required(ATTR_TAG_ID): cv.string}),
     )
     hass.services.async_register(
@@ -613,9 +647,18 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Required(ATTR_CONTAINER_POLICY): vol.In(PRODUCT_CONTAINER_POLICIES),
                 vol.Required(ATTR_STORAGE_BEHAVIOR): vol.In(PRODUCT_STORAGE_BEHAVIORS),
                 vol.Required(ATTR_MEAL_ROLE): vol.In(PRODUCT_MEAL_ROLES),
+                vol.Optional(ATTR_MEAL_COMPONENT_ROLE, default="unknown"): vol.In(PRODUCT_MEAL_COMPONENT_ROLES),
+                vol.Optional(ATTR_MEAL_COMPONENT_FAMILY, default="unknown"): vol.In(PRODUCT_MEAL_COMPONENT_FAMILIES),
+                vol.Optional(ATTR_MEAL_COMPONENT_DETAIL, default=""): cv.string,
                 vol.Required(ATTR_AVAILABLE_IN_MEALIE): cv.boolean,
             }
         ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PLAN_COMPLETE_MEALS,
+        handle_plan_complete_meals,
+        schema=vol.Schema({vol.Optional(ATTR_MEAL_COUNT, default=1): _positive_number}),
     )
     _LOGGER.debug("Registered Mise en Place Assistant services")
     return True

@@ -47,11 +47,13 @@ EVENT_MISE_EN_PLACE_ASSISTANT_SCAN = "esphome.mise_en_place_assistant_scan"
 EVENT_MISE_EN_PLACE_ASSISTANT_CREATE_CONTAINER = "esphome.mise_en_place_assistant_create_container"
 EVENT_MISE_EN_PLACE_ASSISTANT_UPDATE_CONTAINER = "esphome.mise_en_place_assistant_update_container"
 EVENT_MISE_EN_PLACE_ASSISTANT_UPDATED = "mise_en_place_assistant.updated"
+EVENT_MISE_EN_PLACE_ASSISTANT_COMPLETE_MEAL_PLAN = "mise_en_place_assistant.complete_meal_plan"
 
 SERVICE_CREATE_CONTAINER = "create_container"
 SERVICE_CREATE_RECIPE_CONTAINER = "create_recipe_container"
 SERVICE_CLEAR_CONTAINER = "clear_container"
 SERVICE_ARCHIVE_CONTAINER = "archive_container"
+SERVICE_DELETE_CONTAINER = "delete_container"
 SERVICE_RESTORE_CONTAINER = "restore_container"
 SERVICE_CREATE_LOCATION = "create_location"
 SERVICE_UPDATE_LOCATION = "update_location"
@@ -66,6 +68,7 @@ SERVICE_ADD_TO_SHOPPING_LIST = "add_to_shopping_list"
 SERVICE_ADD_EMPTY_CONTAINERS_TO_SHOPPING_LIST = "add_empty_containers_to_shopping_list"
 SERVICE_ADD_MISSING_PRODUCTS_TO_SHOPPING_LIST = "add_missing_products_to_shopping_list"
 SERVICE_UPDATE_PRODUCT_METADATA = "update_product_metadata"
+SERVICE_PLAN_COMPLETE_MEALS = "plan_complete_meals"
 
 SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED = "mise_en_place_assistant_entity_added"
 
@@ -84,3 +87,42 @@ LOCATION_TYPES = ["fridge", "freezer", "pantry", "dry_storage", "cellar", "count
 PRODUCT_STORAGE_BEHAVIORS = ["fridge", "freezer", "pantry", "dry_storage", "cellar", "counter", "unknown"]
 PRODUCT_CONTAINER_POLICIES = ["container", "original_packaging", "either", "no_container", "unknown"]
 PRODUCT_MEAL_ROLES = ["ingredient", "staple", "condiment", "prepared_component", "ignore", "unknown"]
+PRODUCT_MEAL_COMPONENT_ROLES = ["veggie", "starch", "protein", "ignore", "unknown"]
+PRODUCT_MEAL_COMPONENT_FAMILIES = [
+    "leafy_green",
+    "cruciferous",
+    "root",
+    "squash",
+    "legume",
+    "mixed_vegetable",
+    "rice",
+    "pasta",
+    "potato",
+    "bread",
+    "grain",
+    "noodle",
+    "corn",
+    "poultry",
+    "red_meat",
+    "fish",
+    "seafood",
+    "vegetarian",
+    "pork",
+    "egg",
+    "dairy",
+    "unknown",
+]
+PRODUCT_MEAL_PORTION_UNITS = [
+    "portion",
+    "portions",
+    "serving",
+    "servings",
+    "unit",
+    "units",
+    "piece",
+    "pieces",
+    "item",
+    "items",
+    "container",
+    "containers",
+]

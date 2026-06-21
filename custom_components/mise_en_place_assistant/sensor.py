@@ -37,7 +37,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             async_add_entities(new_entities)
 
     add_entities([MiseEnPlaceAssistantStorageAttentionSensor(manager, entry.entry_id)])
-    add_entities([entity for tag_id, container in manager.containers.items() if not container.get("archived") for entity in container_entity(tag_id)])
+    add_entities([entity for tag_id, container in manager.containers.items() if container.get("state") != "deleted" for entity in container_entity(tag_id)])
     add_entities([entity for location in manager.storage_locations() for entity in location_entity(location["id"])])
     @callback
     def handle_entity_added(kind: str, key: str) -> None:
@@ -96,13 +96,12 @@ class MiseEnPlaceAssistantContainerStatusSensor(MiseEnPlaceAssistantBaseSensor):
         container = self.container
         return {
             "tag_id": self.tag_id,
+            "state": container.get("state") or "active",
             "product_id": container.get("product_id"),
             "item_id": container.get("item_id"),
             "item_label": container.get("item_label"),
             "item_format": container.get("item_format"),
             "content_kind": container.get("content_kind"),
-            "archived": bool(container.get("archived")),
-            "archived_at": container.get("archived_at"),
             "quantity": container.get("quantity", 0),
             "unit": container.get("unit"),
             "canonical_quantity": container.get("canonical_quantity", container.get("quantity", 0)),
@@ -114,6 +113,7 @@ class MiseEnPlaceAssistantContainerStatusSensor(MiseEnPlaceAssistantBaseSensor):
             "purchased_date": container.get("purchased_date"),
             "opened_date": container.get("opened_date"),
             "updated_at": container.get("updated_at"),
+            "deleted_at": container.get("deleted_at"),
         }
 
     @property

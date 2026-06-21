@@ -99,7 +99,15 @@ clear_container:
         text:
 
 archive_container:
-  description: Retire an empty container from active inventory without deleting its history.
+  description: Compatibility alias for retiring an empty container from active tracking.
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+
+delete_container:
+  description: Mark a damaged, lost, or discarded physical container as deleted while preserving its history.
   fields:
     tag_id:
       required: true
@@ -107,7 +115,7 @@ archive_container:
         text:
 
 restore_container:
-  description: Return an archived container to active inventory.
+  description: Compatibility alias for returning a retired empty container to active tracking.
   fields:
     tag_id:
       required: true
@@ -378,8 +386,60 @@ update_product_metadata:
             - prepared_component
             - ignore
             - unknown
+    meal_component_role:
+      description: Complete-meal slot this product can fill; eligible items must be tracked in portion-style units.
+      selector:
+        select:
+          options:
+            - veggie
+            - starch
+            - protein
+            - ignore
+            - unknown
+    meal_component_family:
+      description: Diversity family for complete-meal planning, such as poultry, rice, or leafy_green.
+      selector:
+        select:
+          options:
+            - leafy_green
+            - cruciferous
+            - root
+            - squash
+            - legume
+            - mixed_vegetable
+            - rice
+            - pasta
+            - potato
+            - bread
+            - grain
+            - noodle
+            - corn
+            - poultry
+            - red_meat
+            - fish
+            - seafood
+            - vegetarian
+            - pork
+            - egg
+            - dairy
+            - unknown
+    meal_component_detail:
+      description: Specific diversity detail, such as chicken, salmon, broccoli, or basmati_rice.
+      selector:
+        text:
     available_in_mealie:
       required: true
       description: Whether Mise should sync this Grocy product into Mealie Foods for recipe ingredient selection.
       selector:
         boolean:
+
+plan_complete_meals:
+  description: Preview complete meals from available portion-counted inventory without moving or consuming inventory.
+  fields:
+    meal_count:
+      default: 1
+      selector:
+        number:
+          min: 1
+          step: 1
+          mode: box

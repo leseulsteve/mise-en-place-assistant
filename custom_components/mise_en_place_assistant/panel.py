@@ -24,6 +24,19 @@ _LOGGER = logging.getLogger(__name__)
 PANEL_COMPONENT_NAME = "mise_en_place_assistant-panel"
 PANEL_MODULE_URL = "/api/mise_en_place_assistant/panel.js"
 PANEL_FRONTEND_PATH = Path(__file__).with_name("panel_frontend.js")
+MEAL_PREP_CONTAINER_TYPES = [
+    "small square",
+    "medium square",
+    "large square",
+    "small round",
+    "medium round",
+    "large round",
+    "small bag",
+    "medium bag",
+    "large bag",
+    "jar",
+    "bottle",
+]
 
 
 async def async_register_panel(hass: HomeAssistant) -> None:
@@ -103,7 +116,12 @@ class MiseEnPlaceAssistantPanelModuleView(HomeAssistantView):
 
 
 @callback
-@websocket_api.websocket_command({vol.Required("type"): "mise_en_place_assistant/overview"})
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "mise_en_place_assistant/overview",
+        vol.Optional("meal_count", default=1): vol.Coerce(int),
+    }
+)
 def websocket_overview(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
@@ -113,7 +131,7 @@ def websocket_overview(
     _LOGGER.debug("Received sidebar overview WebSocket request")
     try:
         manager = _manager(hass)
-        data = _overview_data(manager)
+        data = _overview_data(manager, meal_count=msg.get("meal_count", 1))
     except (KeyError, StopIteration, TypeError, ValueError):
         _LOGGER.exception("Could not build sidebar overview response")
         connection.send_error(
@@ -137,12 +155,9 @@ def _manager(hass: HomeAssistant) -> MiseEnPlaceAssistantInventory:
     return next(iter(hass.data[DOMAIN].values()))
 
 
-def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
+def _overview_data(manager: MiseEnPlaceAssistantInventory, meal_count: int = 1) -> dict[str, Any]:
     """Build practical overview data for the panel."""
     active_containers = manager.active_containers()
-    archived_containers = [
-        container for container in manager.containers.values() if container.get("archived")
-    ]
     containers = sorted(
         active_containers,
         key=lambda container: container.get("updated_at") or "",
@@ -226,6 +241,14 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
         item_totals=item_totals,
         logbook=manager.logbook,
     )
+    complete_meal_plan = manager.complete_meal_plan(meal_count)
+    meal_prep = _meal_prep_data(
+        hass=manager.hass,
+        containers=containers,
+        complete_meal_plan=complete_meal_plan,
+        readiness=readiness,
+        shopping=shopping_status,
+    )
     suggested_actions = _suggested_actions_data(
         containers=containers,
         empty_containers=empty_containers,
@@ -243,7 +266,6 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
             "items": len(item_totals),
             "empty": len(empty_containers),
             "low": len(low_containers),
-            "archived": len(archived_containers),
             "product_attention": len(product_attention),
             "foods": len(foods),
             "recipes": len(recipes),
@@ -254,12 +276,13 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory) -> dict[str, Any]:
             "location_at_risk": len(readiness["location_at_risk"]),
         },
         "containers": [_container_summary(container, manager) for container in containers],
-        "archived_containers": [_container_summary(container, manager) for container in archived_containers],
         "items": item_totals,
         "foods": foods,
         "product_attention": product_attention,
         "recipes": recipes,
         "meal_inventory": manager.meal_inventory(),
+        "complete_meal_plan": complete_meal_plan,
+        "meal_prep": meal_prep,
         "readiness": readiness,
         "planning_comparison": planning_comparison,
         "suggested_actions": suggested_actions,
@@ -299,6 +322,206 @@ def _entity_options(hass: HomeAssistant) -> list[dict[str, str]]:
     return sorted(options, key=lambda entity: (entity["domain"], entity["name"].casefold(), entity["entity_id"]))
 
 
+def _calendar_options(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Return Home Assistant calendar entities the panel can use for prep sessions."""
+    calendars: list[dict[str, Any]] = []
+    for state in hass.states.async_all("calendar"):
+        attrs = state.attributes
+        calendars.append(
+            {
+                "entity_id": state.entity_id,
+                "name": str(attrs.get("friendly_name") or state.name or state.entity_id),
+                "state": state.state,
+                "message": attrs.get("message") or "",
+                "start_time": attrs.get("start_time") or "",
+                "end_time": attrs.get("end_time") or "",
+            }
+        )
+    return sorted(calendars, key=lambda entity: (entity["name"].casefold(), entity["entity_id"]))
+
+
+def _meal_prep_data(
+    *,
+    hass: HomeAssistant,
+    containers: list[dict[str, Any]],
+    complete_meal_plan: dict[str, Any],
+    readiness: dict[str, Any],
+    shopping: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a provider-backed meal-prep session preview for the panel."""
+    meal_count = max(1, int(complete_meal_plan.get("meal_count") or 1))
+    calendar_options = _calendar_options(hass)
+    calendar_events = [
+        calendar
+        for calendar in calendar_options
+        if calendar.get("state") == "on" or calendar.get("message")
+    ][:6]
+    storage_plan = _meal_prep_storage_plan(complete_meal_plan)
+    required_containers: dict[str, int] = {}
+    for row in storage_plan:
+        container_type = row["container_type"]
+        required_containers[container_type] = required_containers.get(container_type, 0) + int(row["count"])
+    available_containers = _available_container_type_counts(containers)
+    container_plan = []
+    for container_type in MEAL_PREP_CONTAINER_TYPES:
+        needed = required_containers.get(container_type, 0)
+        available = available_containers.get(container_type, 0)
+        container_plan.append(
+            {
+                "type": container_type,
+                "needed": needed,
+                "available": available,
+                "missing": max(0, needed - available),
+                "status": "ready" if needed <= available else "missing",
+            }
+        )
+    for container_type in sorted(set(required_containers) - set(MEAL_PREP_CONTAINER_TYPES)):
+        needed = required_containers[container_type]
+        available = available_containers.get(container_type, 0)
+        container_plan.append(
+            {
+                "type": container_type,
+                "needed": needed,
+                "available": available,
+                "missing": max(0, needed - available),
+                "status": "ready" if needed <= available else "missing",
+            }
+        )
+    missing_containers = sum(row["missing"] for row in container_plan)
+    missing_ingredients = len(readiness.get("missing") or [])
+    status = "ready"
+    if missing_containers or missing_ingredients or complete_meal_plan.get("status") == "short":
+        status = "missing items"
+    return {
+        "status": status,
+        "meal_count": meal_count,
+        "calendar_entities": calendar_options,
+        "calendar_events": calendar_events,
+        "storage_plan": storage_plan,
+        "container_plan": container_plan,
+        "required_container_types": MEAL_PREP_CONTAINER_TYPES,
+        "provider_roles": {
+            "schedule": "Home Assistant calendar",
+            "recipes": "Mealie",
+            "stock": "Grocy",
+            "shopping": _shopping_target_summary(shopping, "missing_products"),
+            "storage": "Grocy storage locations + Mise container tags",
+        },
+        "clone_templates": [
+            {
+                "id": "current_complete_meals",
+                "name": f"{meal_count} complete meals",
+                "source": "Mealie complete-meal preview",
+                "keeps": [
+                    "recipes",
+                    "servings",
+                    "storage plan",
+                    "container plan",
+                    "checklist",
+                    "notes",
+                ],
+            }
+        ],
+        "checklist": [
+            "Pick a Home Assistant calendar and schedule the prep block",
+            "Queue missing ingredients through Grocy or the configured shopping provider",
+            "Pull storage containers by type",
+            "Wash or free any missing containers",
+            "Clear Grocy-backed fridge/freezer locations for finished portions",
+            "Label containers with destination and eat-by date",
+        ],
+    }
+
+
+def _meal_prep_storage_plan(complete_meal_plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return container-oriented storage rows for a complete meal preview."""
+    meal_count = max(1, int(complete_meal_plan.get("meal_count") or 1))
+    rows = [
+        {
+            "label": "Complete meal portions",
+            "count": meal_count,
+            "container_type": "medium square",
+            "destination": "fridge",
+            "eat_by": "next 3-4 days",
+            "note": "One assembled meal per container",
+        }
+    ]
+    role_types = {
+        "veggie": "small square",
+        "starch": "small square",
+        "protein": "medium square",
+    }
+    for role, items in (complete_meal_plan.get("uses") or {}).items():
+        if not items:
+            continue
+        labels = ", ".join(str(item.get("label") or item.get("name") or role) for item in items[:2])
+        remaining = len(items) - 2
+        if remaining > 0:
+            labels = f"{labels} + {remaining} more"
+        rows.append(
+            {
+                "label": f"{role.title()} staging",
+                "count": 1,
+                "container_type": role_types.get(role, "medium square"),
+                "destination": "fridge/freezer",
+                "eat_by": "session dependent",
+                "note": labels,
+            }
+        )
+    return rows
+
+
+def _available_container_type_counts(containers: list[dict[str, Any]]) -> dict[str, int]:
+    """Count empty reusable containers by normalized storage type."""
+    counts: dict[str, int] = {}
+    for container in containers:
+        if _as_float(container.get("canonical_quantity", container.get("quantity", 0))) != 0:
+            continue
+        container_type = _container_type(container)
+        counts[container_type] = counts.get(container_type, 0) + 1
+    return counts
+
+
+def _container_type(container: dict[str, Any]) -> str:
+    """Infer a stable container type from provider metadata or display names."""
+    explicit = str(
+        container.get("container_type")
+        or container.get("storage_container_type")
+        or container.get("format")
+        or ""
+    ).strip().casefold().replace("_", " ").replace("-", " ")
+    haystack = " ".join(
+        str(value or "")
+        for value in (explicit, container.get("name"), container.get("item_label"))
+    ).casefold().replace("_", " ").replace("-", " ")
+    for container_type in MEAL_PREP_CONTAINER_TYPES:
+        if container_type in haystack:
+            return container_type
+    if "bag" in haystack:
+        if "large" in haystack:
+            return "large bag"
+        if "medium" in haystack:
+            return "medium bag"
+        return "small bag"
+    if "jar" in haystack:
+        return "jar"
+    if "bottle" in haystack:
+        return "bottle"
+    if "round" in haystack:
+        if "large" in haystack:
+            return "large round"
+        if "medium" in haystack:
+            return "medium round"
+        return "small round"
+    if "square" in haystack or "container" in haystack or "tub" in haystack:
+        if "large" in haystack:
+            return "large square"
+        if "small" in haystack:
+            return "small square"
+        return "medium square"
+    return "unspecified"
+
+
 def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantInventory | None = None) -> dict[str, Any]:
     """Return display-safe container data."""
     product = manager.product_for_container(container) if manager else None
@@ -306,6 +529,7 @@ def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantI
         "tag_id": container.get("tag_id"),
         "name": container.get("name") or "Container",
         "product_id": container.get("product_id"),
+        "state": container.get("state") or "active",
         "item_label": manager.item_label_for_container(container) if manager else container.get("item_label") or "No current item",
         "format": container.get("item_format") or "",
         "quantity": container.get("display_quantity", container.get("quantity", 0)),
@@ -319,10 +543,9 @@ def _container_summary(container: dict[str, Any], manager: MiseEnPlaceAssistantI
         "best_before_date": container.get("best_before_date") or "",
         "purchased_date": container.get("purchased_date") or "",
         "opened_date": container.get("opened_date") or "",
-        "archived": bool(container.get("archived")),
-        "archived_at": container.get("archived_at") or "",
         "updated_at": container.get("updated_at") or "",
         "created_at": container.get("created_at") or "",
+        "deleted_at": container.get("deleted_at") or "",
         "recipe": _recipe_summary(container, product, manager),
     }
 
@@ -351,6 +574,9 @@ def _recipe_summary(
         "categories": recipe.get("categories") or [],
         "component": classification.get("component") or "",
         "primary_protein": classification.get("primary_protein") or "",
+        "meal_component_role": classification.get("meal_component_role") or "",
+        "meal_component_family": classification.get("meal_component_family") or "",
+        "meal_component_detail": classification.get("meal_component_detail") or "",
     }
 
 
