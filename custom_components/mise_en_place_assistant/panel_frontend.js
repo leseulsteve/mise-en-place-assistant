@@ -19,10 +19,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this._moveContainerLocation ??= "";
     this._busyAction ??= "";
     this._planningFilter ??= "all";
+    this._inventoryFilters ??= { category: "all", source: "all", location: "all" };
+    this._inventoryPage ??= 1;
+    this._inventoryPageSize ??= 10;
     this._mealPlanCount ??= 1;
     this._tvDinnerCount ??= 1;
     this._tvDinnerPlan ??= null;
-    this._tvDinnerMealContainers ??= {};
     this._mealPrepSummaryDraft ??= "";
     this._selectedPrepSessionId ??= "";
     this._prepRecipeSelection ??= {};
@@ -321,6 +323,23 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           flex-wrap: wrap;
           margin-bottom: 12px;
         }
+        .inventory-controls {
+          display: grid;
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+          gap: 10px;
+          margin-bottom: 12px;
+        }
+        .pager {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          flex-wrap: wrap;
+          margin-top: 12px;
+          padding-top: 12px;
+          border-top: 1px solid var(--divider-color);
+        }
+        .pager .actions { margin-left: auto; }
         .grid, .debug-grid {
           display: grid;
           grid-template-columns: repeat(5, minmax(130px, 1fr));
@@ -823,6 +842,19 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         }
         .content-count { color: var(--secondary-text-color); font-size: 11px; font-weight: 700; }
         .content-group .row:first-of-type { border-top: 0; }
+        .inventory-group + .inventory-group { margin-top: 10px; }
+        .tv-dinner-component {
+          display: grid;
+          grid-template-columns: minmax(72px, .45fr) minmax(0, 1fr);
+          gap: 9px;
+          align-items: start;
+          padding: 8px 10px;
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          background: var(--secondary-background-color, rgba(128,128,128,.04));
+        }
+        .tv-dinner-component strong { font-size: 12px; }
+        .tv-dinner-component .muted { display: block; margin-top: 2px; }
         .location {
           display: flex;
           justify-content: space-between;
@@ -862,6 +894,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           .action-context-grid { grid-template-columns: 1fr; }
           .readiness-grid { grid-template-columns: 1fr; }
           .compare-grid { grid-template-columns: 1fr; }
+          .inventory-controls { grid-template-columns: 1fr; }
+          .tv-dinner-component { grid-template-columns: 1fr; }
           .form-grid, .review-grid, .inline-grid, .debug-grid, .container-actions { grid-template-columns: 1fr; }
           .location-card-header { grid-template-columns: 1fr; }
           .location-card-actions { justify-content: flex-start; }
@@ -895,6 +929,20 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-tab]").forEach((button) => button.addEventListener("click", () => { this._tab = button.dataset.tab; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-open-tab]").forEach((button) => button.addEventListener("click", () => { this._tab = button.dataset.openTab; this._render(); }));
     this.shadowRoot.querySelectorAll("[data-planning-filter]").forEach((button) => button.addEventListener("click", () => { this._planningFilter = button.dataset.planningFilter; this._render(); }));
+    this.shadowRoot.querySelectorAll("[data-inventory-filter]").forEach((select) => select.addEventListener("change", () => {
+      this._inventoryFilters = { ...(this._inventoryFilters || {}), [select.dataset.inventoryFilter]: select.value };
+      this._inventoryPage = 1;
+      this._render();
+    }));
+    this.shadowRoot.querySelectorAll("[data-inventory-page]").forEach((button) => button.addEventListener("click", () => {
+      this._inventoryPage = Math.max(1, Number(button.dataset.inventoryPage || 1));
+      this._render();
+    }));
+    this.shadowRoot.querySelectorAll("[data-inventory-page-size]").forEach((select) => select.addEventListener("change", () => {
+      this._inventoryPageSize = Math.max(5, Number(select.value) || 10);
+      this._inventoryPage = 1;
+      this._render();
+    }));
     this.shadowRoot.getElementById("complete-meal-count")?.addEventListener("change", (event) => {
       const count = Math.max(1, Math.floor(Number(event.currentTarget.value) || 1));
       this._mealPlanCount = count;
@@ -906,11 +954,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       this._tvDinnerCount = Math.max(1, current + Number(button.dataset.tvDinnerCountStep || 0));
       this._render();
     }));
-    this.shadowRoot.querySelectorAll("[data-tv-dinner-meal-container]").forEach((select) => select.addEventListener("change", () => {
-      this._tvDinnerMealContainers[select.dataset.tvDinnerMealContainer] = select.value;
-    }));
     this.shadowRoot.getElementById("tv-dinner-dice")?.addEventListener("click", () => this._rollTvDinner());
-    this.shadowRoot.getElementById("tv-dinner-transfer")?.addEventListener("click", () => this._transferTvDinners());
+    this.shadowRoot.querySelectorAll("[data-tv-dinner-ready]").forEach((button) => button.addEventListener("click", () => this._transferTvDinnerMeal(button.dataset.tvDinnerReady)));
     this.shadowRoot.getElementById("add-location")?.addEventListener("click", () => { if (this._isBusy()) return; this._editingLocation = ""; this._showLocation = !this._showLocation; this._render(); });
     this.shadowRoot.getElementById("create-form")?.addEventListener("submit", (event) => this._createContainer(event));
     this.shadowRoot.getElementById("edit-container-form")?.addEventListener("submit", (event) => this._saveContainerEdit(event));
@@ -1026,6 +1071,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
 
   _inventoryView(items, containers, locations) {
     const groups = this._inventoryProductGroups(items);
+    const filteredStocked = this._inventoryFilteredProducts(groups.stocked);
+    const pagedStocked = this._inventoryPagedProducts(filteredStocked);
     const attention = this._inventoryReviewRows(this._data?.product_attention || []);
     const readyToEatSoon = this._inventoryReadyToEatSoon(containers, locations);
     return `
@@ -1041,7 +1088,9 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           <div class="stack">
             <section class="card">
               <div class="toolbar"><h2>Current inventory</h2><button type="button" class="secondary" data-open-tab="attention">Attention</button></div>
-              ${groups.stocked.length ? groups.stocked.map((item) => this._inventoryProductRow(item)).join("") : this._empty("No stocked products.")}
+              ${this._inventoryFilterControls(groups.stocked)}
+              ${filteredStocked.length ? this._inventoryGroupedProducts(pagedStocked.items) : this._empty(groups.stocked.length ? "No stocked products match these filters." : "No stocked products.")}
+              ${this._inventoryPager(pagedStocked)}
             </section>
             <section class="card">
               <h2>Prepared inventory</h2>
@@ -1157,8 +1206,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
             <div class="toolbar">
               <h2>Tv dinner</h2>
               <div class="actions">
-                <label class="meal-selector">Meals
-                  <span class="meal-stepper" aria-label="Number of meals to generate">
+                <label class="meal-selector" aria-label="Number of meals to generate">
+                  <span class="meal-stepper">
                     <button type="button" class="icon-button" data-tv-dinner-count-step="-1" title="Fewer meals" aria-label="Fewer meals"><ha-icon icon="mdi:minus"></ha-icon></button>
                     <output id="tv-dinner-count" aria-live="polite">${this._safe(mealCount)}</output>
                     <button type="button" class="icon-button" data-tv-dinner-count-step="1" title="More meals" aria-label="More meals"><ha-icon icon="mdi:plus"></ha-icon></button>
@@ -1178,7 +1227,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const shortages = Object.values(plan.shortages || {});
     const meals = plan.meals || [];
     const availableContainers = this._availableTvDinnerContainers(data);
-    const transferable = this._tvDinnerTransferMeals(plan, availableContainers);
+    const transferable = this._tvDinnerTransferMeals(plan, availableContainers, data);
     const skipped = (plan.skipped || []).slice(0, 6).map((item) => `<p class="muted subline">${this._safe(item.label)}: ${this._safe(item.reason)}</p>`).join("");
     return `
       <div class="summary-row ${plan.complete ? "ok" : "warn"}">
@@ -1186,50 +1235,54 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <p class="muted subline">Best-before and variety weighted random assignment</p>
       </div>
       ${shortages.length ? `<div class="row compact-row"><div><p class="name">Shortages</p>${shortages.map((item) => `<p class="muted subline">${this._safe(item.label || "")}: missing ${this._safe(item.missing)}</p>`).join("")}</div></div>` : ""}
-      <div class="recipe-grid">${meals.map((meal, index) => this._tvDinnerMeal(meal, availableContainers, index)).join("")}</div>
-      <div class="meal-transfer">
-        <button type="button" id="tv-dinner-transfer"${transferable.length ? "" : " disabled"}>Transfer complete meals</button>
-      </div>
+      <div class="recipe-grid">${meals.map((meal) => this._tvDinnerMeal(meal, transferable)).join("")}</div>
       ${skipped ? `<div class="row compact-row"><div><p class="name">Skipped</p>${skipped}</div></div>` : ""}
     `;
   }
 
-  _tvDinnerMeal(meal = {}, availableContainers = [], index = 0) {
+  _tvDinnerMeal(meal = {}, transferable = []) {
     const components = meal.components || {};
     const rows = [
-      ["veggie", "Veggie"],
-      ["starch", "Starch"],
       ["protein", "Protein"],
-    ].map(([role, label]) => {
-      const component = components[role];
-      return component
-        ? `<p class="muted subline"><strong>${label}</strong>: ${this._safe(component.label)}${this._componentDiversity(component)}${this._componentPlace(component)}</p>`
-        : `<p class="muted subline"><strong>${label}</strong>: missing</p>`;
-    }).join("");
+      ["starch", "Starch"],
+      ["veggie", "Veggie"],
+    ].map(([role, label]) => this._tvDinnerComponentRow(label, components[role])).join("");
     const mealId = String(meal.meal || "");
-    const selectedTagId = this._tvDinnerMealContainers[mealId] || availableContainers[index]?.tag_id || "";
-    const options = availableContainers.map((container) => `<option value="${this._safe(container.tag_id)}"${container.tag_id === selectedTagId ? " selected" : ""}>${this._safe(container.name || container.tag_id)}</option>`).join("");
+    const transferableMeal = transferable.find((candidate) => String(candidate.meal || "") === mealId);
+    const ready = Boolean(transferableMeal?.container_tag_id);
     return `<article class="row compact-row">
       <div>
         <p class="name">Meal ${this._safe(meal.meal || "")}</p>
         ${rows}
         <div class="meal-transfer">
-          <label>Container<select data-tv-dinner-meal-container="${this._safe(mealId)}" ${meal.complete === false || !availableContainers.length ? "disabled" : ""}>
-            ${options || '<option value="">No TV dinner containers</option>'}
-          </select></label>
+          <button type="button" data-tv-dinner-ready="${this._safe(mealId)}"${ready ? "" : " disabled"}>Ready</button>
         </div>
       </div>
     </article>`;
   }
 
-  _componentDiversity(component = {}) {
-    const diversity = [component.family && component.family !== "unknown" ? component.family : "", component.detail || ""].filter(Boolean).join(" · ");
-    return diversity ? ` · ${this._safe(diversity)}` : "";
+  _tvDinnerComponentRow(label, component = null) {
+    if (!component) {
+      return `<div class="tv-dinner-component"><strong>${this._safe(label)}</strong><span class="muted subline">Missing source component</span></div>`;
+    }
+    const place = [component.location, component.sublocation].filter(Boolean).join(" / ") || "No location";
+    const productInfo = this._tvDinnerComponentProductInfo(component);
+    return `<div class="tv-dinner-component">
+      <strong>${this._safe(label)}</strong>
+      <span>
+        1 portion ${this._safe(component.label)}
+        <span class="muted subline">Source: ${this._safe(place)}</span>
+        ${productInfo ? `<span class="muted subline">Product: ${this._safe(productInfo)}</span>` : ""}
+      </span>
+    </div>`;
   }
 
-  _componentPlace(component = {}) {
-    const place = [component.location, component.sublocation].filter(Boolean).join(" / ");
-    return place ? ` · ${this._safe(place)}` : "";
+  _tvDinnerComponentProductInfo(component = {}) {
+    return [
+      component.family && component.family !== "unknown" ? component.family : "",
+      component.detail || "",
+      component.tag_id || "",
+    ].filter(Boolean).join(" · ");
   }
 
   _mealPrepView(mealPrep = {}, data = {}) {
@@ -2477,7 +2530,6 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         type: "mise_en_place_assistant/tv_dinner_plan",
         meal_count: this._tvDinnerCount || 1,
       });
-      this._tvDinnerMealContainers = {};
       this._notice = "TV dinner rolled.";
       this._render();
     }, (err) => {
@@ -2486,37 +2538,47 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     });
   }
 
-  async _transferTvDinners() {
+  async _transferTvDinnerMeal(mealId) {
     if (this._isBusy() || !this._hass) return;
-    const meals = this._tvDinnerTransferMeals(this._tvDinnerPlan, this._availableTvDinnerContainers(this._data));
+    await this._load();
+    const meals = this._tvDinnerTransferMeals(this._tvDinnerPlan, this._availableTvDinnerContainers(this._data), this._data)
+      .filter((meal) => String(meal.meal || "") === String(mealId || ""));
     if (!meals.length) {
-      this._error = "No complete TV dinner meals are ready to transfer.";
+      this._error = "This TV dinner meal is no longer available. Roll again to refresh the source components.";
       this._render();
       return;
     }
-    await this._withBusy("transferring tv dinners", async () => {
+    await this._withBusy("transferring tv dinner", async () => {
       await this._hass.callService("mise_en_place_assistant", "transfer_tv_dinners", { meals });
-      this._tvDinnerPlan = null;
-      this._notice = `${meals.length} TV dinner${meals.length === 1 ? "" : "s"} transferred to fridge containers.`;
+      const remaining = (this._tvDinnerPlan?.meals || []).filter((meal) => String(meal.meal || "") !== String(mealId || ""));
+      this._tvDinnerPlan = remaining.length ? { ...this._tvDinnerPlan, meals: remaining, meal_count: remaining.length } : null;
+      this._notice = "TV dinner transferred to a fridge container.";
       await this._loadIfNoEventSocket();
     }, (err) => {
-      this._error = err?.message || "Could not transfer TV dinners.";
+      this._error = err?.message || "Could not transfer TV dinner.";
       this._render();
     });
   }
 
-  _tvDinnerTransferMeals(plan = {}, availableContainers = []) {
-    return (plan?.meals || []).filter((meal) => {
+  _tvDinnerTransferMeals(plan = {}, availableContainers = [], data = {}) {
+    const currentContainers = new Map((data?.containers || []).map((container) => [container.tag_id, container]));
+    const usedContainers = new Set();
+    return (plan?.meals || []).map((meal, index) => ({ meal, index })).filter(({ meal }) => {
       const components = meal.components || {};
-      return meal.complete !== false && ["veggie", "starch", "protein"].every((role) => components[role]?.tag_id);
-    }).slice(0, availableContainers.length).map((meal, index) => {
-      const mealId = String(meal.meal || "");
+      return meal.complete !== false && ["veggie", "starch", "protein"].every((role) => this._tvDinnerSourceAvailable(components[role], role, currentContainers));
+    }).slice(0, availableContainers.length).map(({ meal, index }) => {
       const components = meal.components || {};
+      const preferredContainer = availableContainers[index]?.tag_id || "";
+      const fallbackContainer = availableContainers.find((container) => !usedContainers.has(container.tag_id))?.tag_id || "";
+      const containerTagId = preferredContainer && !usedContainers.has(preferredContainer) ? preferredContainer : fallbackContainer;
+      if (containerTagId) {
+        usedContainers.add(containerTagId);
+      }
       return {
         meal: meal.meal,
         complete: true,
         container_type: "tv_dinner",
-        container_tag_id: this._tvDinnerMealContainers[mealId] || availableContainers[index]?.tag_id || "",
+        container_tag_id: containerTagId,
         components: {
           veggie: this._tvDinnerTransferComponent(components.veggie),
           starch: this._tvDinnerTransferComponent(components.starch),
@@ -2532,6 +2594,19 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       label: component.label,
       quantity: 1,
     };
+  }
+
+  _tvDinnerSourceAvailable(component = {}, role = "", currentContainers = new Map()) {
+    if (!component?.tag_id) {
+      return false;
+    }
+    if (!currentContainers.size) {
+      return true;
+    }
+    const container = currentContainers.get(component.tag_id);
+    const quantity = Number(container?.canonical_quantity ?? container?.quantity ?? 0);
+    const currentRole = container?.recipe?.meal_component_role || container?.recipe?.component || component.role || "";
+    return Boolean(container && Number.isFinite(quantity) && quantity > 0 && currentRole === role);
   }
 
   _availableTvDinnerContainers(data = {}) {
@@ -3284,6 +3359,143 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     };
   }
 
+  _inventoryFilterControls(items = []) {
+    const filters = this._normalizedInventoryFilters(items);
+    const categoryOptions = [
+      ["all", "All stock"],
+      ["prepared", "Prepared"],
+      ["catalog", "Catalog stock"],
+      ["local", "Local stock"],
+    ];
+    const sources = [...new Set(items.map((item) => item.source || "mise").filter(Boolean))]
+      .sort((a, b) => this._inventorySourceLabel(a).localeCompare(this._inventorySourceLabel(b)));
+    const sourceOptions = [["all", "All sources"], ...sources.map((source) => [source, this._inventorySourceLabel(source)])];
+    const locations = [...new Set(items.flatMap((item) => Object.keys(item.locations || {})))]
+      .sort((a, b) => a.localeCompare(b));
+    const locationOptions = [["all", "All locations"], ...locations.map((location) => [location, location])];
+    const pageSizeOptions = [[5, "5 rows"], [10, "10 rows"], [25, "25 rows"], [50, "50 rows"]];
+    return `
+      <div class="inventory-controls">
+        <label>Type<select data-inventory-filter="category">${this._options(categoryOptions, filters.category)}</select></label>
+        <label>Source<select data-inventory-filter="source">${this._options(sourceOptions, filters.source)}</select></label>
+        <label>Location<select data-inventory-filter="location">${this._options(locationOptions, filters.location)}</select></label>
+        <label>Rows<select data-inventory-page-size>${this._options(pageSizeOptions, String(this._inventoryPageSize || 10))}</select></label>
+      </div>
+    `;
+  }
+
+  _inventoryFilteredProducts(items = []) {
+    const filters = this._normalizedInventoryFilters(items);
+    return items.filter((item) => {
+      if (filters.category !== "all" && this._inventoryCategory(item) !== filters.category) {
+        return false;
+      }
+      if (filters.source !== "all" && (item.source || "mise") !== filters.source) {
+        return false;
+      }
+      if (filters.location !== "all" && !Object.keys(item.locations || {}).includes(filters.location)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  _inventoryGroupedProducts(items = []) {
+    return this._inventoryLogicalGroups(items).map((group) => `
+      <section class="content-group inventory-group">
+        <h3>${this._safe(group.label)} <span class="content-count">${this._safe(group.items.length)} ${group.items.length === 1 ? "item" : "items"}</span></h3>
+        ${group.items.map((item) => this._inventoryProductRow(item)).join("")}
+      </section>
+    `).join("");
+  }
+
+  _inventoryLogicalGroups(items = []) {
+    const groups = new Map();
+    for (const item of items) {
+      const label = this._inventoryLogicalGroupLabel(item);
+      if (!groups.has(label)) {
+        groups.set(label, []);
+      }
+      groups.get(label).push(item);
+    }
+    const order = ["Prepared foods", "Grocy stock", "Mealie recipe stock", "DEV stock", "Mise inventory", "Other stock"];
+    return [...groups.entries()]
+      .sort(([left], [right]) => {
+        const leftIndex = order.includes(left) ? order.indexOf(left) : order.length;
+        const rightIndex = order.includes(right) ? order.indexOf(right) : order.length;
+        return leftIndex - rightIndex || left.localeCompare(right);
+      })
+      .map(([label, groupItems]) => ({
+        label,
+        items: groupItems.sort((a, b) => (a.label || "").localeCompare(b.label || "")),
+      }));
+  }
+
+  _inventoryPagedProducts(items = []) {
+    const pageSize = Math.max(5, Number(this._inventoryPageSize) || 10);
+    const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+    const page = Math.min(Math.max(1, Number(this._inventoryPage) || 1), pageCount);
+    this._inventoryPage = page;
+    this._inventoryPageSize = pageSize;
+    const start = (page - 1) * pageSize;
+    return {
+      items: items.slice(start, start + pageSize),
+      page,
+      pageCount,
+      pageSize,
+      total: items.length,
+      start: items.length ? start + 1 : 0,
+      end: Math.min(items.length, start + pageSize),
+    };
+  }
+
+  _inventoryPager(page = {}) {
+    if (!page.total) {
+      return "";
+    }
+    return `
+      <div class="pager">
+        <span class="muted">${this._safe(page.start)}-${this._safe(page.end)} of ${this._safe(page.total)} stocked products</span>
+        <div class="actions">
+          <button type="button" class="secondary" data-inventory-page="${this._safe(page.page - 1)}" ${page.page <= 1 ? "disabled" : ""}>Previous</button>
+          <span class="muted">Page ${this._safe(page.page)} of ${this._safe(page.pageCount)}</span>
+          <button type="button" class="secondary" data-inventory-page="${this._safe(page.page + 1)}" ${page.page >= page.pageCount ? "disabled" : ""}>Next</button>
+        </div>
+      </div>
+    `;
+  }
+
+  _normalizedInventoryFilters(items = []) {
+    const filters = this._inventoryFilters || {};
+    const sources = new Set(items.map((item) => item.source || "mise"));
+    const locations = new Set(items.flatMap((item) => Object.keys(item.locations || {})));
+    const category = ["all", "prepared", "catalog", "local"].includes(filters.category) ? filters.category : "all";
+    return {
+      category,
+      source: filters.source === "all" || sources.has(filters.source) ? filters.source || "all" : "all",
+      location: filters.location === "all" || locations.has(filters.location) ? filters.location || "all" : "all",
+    };
+  }
+
+  _inventoryCategory(item = {}) {
+    return this._inventoryIsPrepared(item) ? "prepared" : item.source && item.source !== "mise" ? "catalog" : "local";
+  }
+
+  _inventoryLogicalGroupLabel(item = {}) {
+    if (this._inventoryIsPrepared(item)) {
+      return "Prepared foods";
+    }
+    if (item.source) {
+      return this._inventorySourceLabel(item.source);
+    }
+    return Object.keys(item.locations || {}).length ? "Mise inventory" : "Other stock";
+  }
+
+  _inventoryIsPrepared(item = {}) {
+    const text = `${item.label || ""} ${item.content_kind || ""} ${item.source || ""}`.toLowerCase();
+    return text.includes("meal") || text.includes("recipe") || text.includes("prepared");
+  }
+
   _inventoryReviewRows(items = []) {
     return items
       .filter((item) => item && (item.reasons?.length || !item.has_stock))
@@ -3337,12 +3549,14 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _inventoryReadyToEatRow(container, locations = []) {
     const locationType = (locations.find((location) => location.id === container.location_id) || {}).location_type || "";
     const status = this._inventoryDueSoonStatus(container, locationType);
+    const storageLabel = this._inventoryReadyStorageLabel(container, locationType);
     const location = this._containerPlace(container) || "No location";
     const quantity = `${container.quantity ?? 0} ${container.unit || ""}`.trim();
     return this._summaryRow(container.item_label || container.name || "Ready meal", [
       container.name || "",
       location,
       status.label,
+      storageLabel && storageLabel !== status.label ? storageLabel : "",
     ], {
       quantity,
       klass: status.klass,
@@ -3385,23 +3599,39 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _inventoryReadyStorageStatus(container = {}, locationType = "") {
+    const readyAge = this._inventoryReadyStorageAge(container, locationType);
+    if (!readyAge) {
+      return { rank: 0, label: "", klass: "", sortDate: "" };
+    }
+    const limit = locationType === "fridge" ? 4 : 1;
+    if (readyAge.days >= limit) {
+      return { rank: 3, label: readyAge.label, klass: "critical", sortDate: readyAge.date };
+    }
+    if (readyAge.days >= Math.max(1, limit - 1)) {
+      return { rank: 1, label: readyAge.label, klass: "warn", sortDate: readyAge.date };
+    }
+    return { rank: 0, label: "", klass: "", sortDate: readyAge.date };
+  }
+
+  _inventoryReadyStorageLabel(container = {}, locationType = "") {
+    return this._inventoryReadyStorageAge(container, locationType)?.label || "";
+  }
+
+  _inventoryReadyStorageAge(container = {}, locationType = "") {
     const storedSince = this._parseInventoryDateTime(container.updated_at || container.created_at);
     if (!storedSince || locationType === "freezer") {
-      return { rank: 0, label: "", klass: "", sortDate: "" };
+      return null;
     }
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     storedSince.setHours(0, 0, 0, 0);
     const days = Math.max(0, Math.round((today.getTime() - storedSince.getTime()) / 86400000));
-    const limit = locationType === "fridge" ? 4 : 1;
-    const label = `Not in freezer since ${this._formatDate(storedSince)} · ${days} ${days === 1 ? "day" : "days"} ready`;
-    if (days >= limit) {
-      return { rank: 3, label, klass: "critical", sortDate: this._formatDate(storedSince) };
-    }
-    if (days >= Math.max(1, limit - 1)) {
-      return { rank: 1, label, klass: "warn", sortDate: this._formatDate(storedSince) };
-    }
-    return { rank: 0, label: "", klass: "", sortDate: this._formatDate(storedSince) };
+    const date = this._formatDate(storedSince);
+    return {
+      date,
+      days,
+      label: `Not in freezer for ${days} ${days === 1 ? "day" : "days"}`,
+    };
   }
 
   _parseInventoryDate(value) {
@@ -3509,7 +3739,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _inventorySourceLabel(source) {
-    return source === "grocy" ? "Grocy stock" : source === "mealie" ? "Mealie recipe" : source === "mocked" ? "DEV stock" : source ? `${source} stock` : "Mise inventory";
+    return source === "grocy" ? "Grocy stock" : source === "mealie" ? "Mealie recipe" : source === "mocked" ? "DEV stock" : source === "mise" ? "Mise inventory" : source ? `${source} stock` : "Mise inventory";
   }
 
   _logRow(entry) {
@@ -3539,7 +3769,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _options(options, current) {
-    return options.map(([value, label]) => `<option value="${this._safe(value)}"${value === current ? " selected" : ""}>${this._safe(label)}</option>`).join("");
+    return options.map(([value, label]) => `<option value="${this._safe(value)}"${String(value) === String(current) ? " selected" : ""}>${this._safe(label)}</option>`).join("");
   }
 
   _entitySelect(name, current, domains) {

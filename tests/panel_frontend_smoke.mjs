@@ -114,6 +114,7 @@ panel.hass = {
       canonical_quantity: 2,
       canonical_unit: "cups",
       best_before_date: "2026-06-22",
+      updated_at: "2026-06-19T12:00:00Z",
       location_id: "fridge",
       location: "Fridge",
       sublocation: "Top shelf",
@@ -142,6 +143,78 @@ panel.hass = {
       sublocation: "Top shelf",
       content_kind: "meal",
     }, {
+      tag_id: "demo:broccoli",
+      name: "Broccoli prep tub",
+      item_label: "Roasted broccoli",
+      quantity: 2,
+      unit: "portions",
+      canonical_quantity: 2,
+      canonical_unit: "portions",
+      location_id: "prep",
+      location: "Prep fridge",
+      content_kind: "meal",
+      recipe: { meal_component_role: "veggie", component: "veggie" },
+    }, {
+      tag_id: "demo:meal-rice",
+      name: "Rice prep tub",
+      item_label: "Cooked basmati rice",
+      quantity: 1,
+      unit: "portions",
+      canonical_quantity: 1,
+      canonical_unit: "portions",
+      location_id: "prep",
+      location: "Prep fridge",
+      content_kind: "meal",
+      recipe: { meal_component_role: "starch", component: "starch" },
+    }, {
+      tag_id: "demo:curry",
+      name: "Curry prep tub",
+      item_label: "Chicken curry",
+      quantity: 1,
+      unit: "portions",
+      canonical_quantity: 1,
+      canonical_unit: "portions",
+      location_id: "prep",
+      location: "Prep fridge",
+      content_kind: "meal",
+      recipe: { meal_component_role: "protein", component: "protein" },
+    }, {
+      tag_id: "demo:braised-greens",
+      name: "Greens prep tub",
+      item_label: "Braised greens",
+      quantity: 1,
+      unit: "portions",
+      canonical_quantity: 1,
+      canonical_unit: "portions",
+      location_id: "prep",
+      location: "Prep fridge",
+      content_kind: "meal",
+      recipe: { meal_component_role: "veggie", component: "veggie" },
+    }, {
+      tag_id: "demo:sweet-potatoes",
+      name: "Sweet potato prep tub",
+      item_label: "Sweet potatoes",
+      quantity: 1,
+      unit: "portions",
+      canonical_quantity: 1,
+      canonical_unit: "portions",
+      location_id: "prep",
+      location: "Prep fridge",
+      content_kind: "meal",
+      recipe: { meal_component_role: "starch", component: "starch" },
+    }, {
+      tag_id: "demo:salmon",
+      name: "Salmon prep tub",
+      item_label: "Salmon portions",
+      quantity: 1,
+      unit: "portions",
+      canonical_quantity: 1,
+      canonical_unit: "portions",
+      location_id: "prep",
+      location: "Prep fridge",
+      content_kind: "meal",
+      recipe: { meal_component_role: "protein", component: "protein" },
+    }, {
       tag_id: "demo:peas",
       name: "Freezer bin",
       item_label: "Frozen peas",
@@ -156,7 +229,7 @@ panel.hass = {
     }, {
       tag_id: "demo:frozen-tv-dinner",
       name: "Microwave TV dinner",
-      item_label: "Chicken TV dinner",
+      item_label: "Chicken curry + Cooked basmati rice + Roasted broccoli",
       quantity: 1,
       unit: "portion",
       canonical_quantity: 1,
@@ -195,6 +268,40 @@ panel.hass = {
       container_type: "tv dinner",
     }],
     items: [{
+      product_id: "product_apples",
+      item_id: "grocy:10",
+      label: "Apples",
+      source: "grocy",
+      quantity: 6,
+      unit: "each",
+      containers: 1,
+      locations: { Counter: { each: 6 } },
+    }, {
+      product_id: "product_lemons",
+      item_id: "local:lemons",
+      label: "Lemons",
+      quantity: 3,
+      unit: "each",
+      containers: 1,
+      locations: { Counter: { each: 3 } },
+    }, {
+      product_id: "product_rice",
+      item_id: "grocy:11",
+      label: "Rice",
+      source: "grocy",
+      quantity: 1,
+      unit: "bag",
+      containers: 1,
+      locations: { Pantry: { bag: 1 } },
+    }, {
+      product_id: "product_salt",
+      item_id: "local:salt",
+      label: "Salt",
+      quantity: 1,
+      unit: "box",
+      containers: 1,
+      locations: { Pantry: { box: 1 } },
+    }, {
       product_id: "product_tomatoes",
       item_id: "grocy:12",
       label: "Tomatoes",
@@ -221,6 +328,25 @@ panel.hass = {
         action: "Grocy stock updated",
         message: "Grocy stock was updated for Sauce tub.",
       },
+    }, {
+      product_id: "product_sauce",
+      item_id: "mealie:recipe:sauce",
+      label: "Tomato sauce",
+      source: "mealie",
+      quantity: 2,
+      unit: "cups",
+      content_kind: "recipe",
+      containers: 1,
+      locations: { Fridge: { cups: 2 } },
+    }, {
+      product_id: "product_yogurt",
+      item_id: "grocy:13",
+      label: "Yogurt",
+      source: "grocy",
+      quantity: 1,
+      unit: "tub",
+      containers: 1,
+      locations: { Fridge: { tub: 1 } },
     }],
     locations: [{
       id: "fridge",
@@ -507,16 +633,45 @@ panel._tab = "inventory";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Current inventory/);
 assert.match(panel.shadowRoot.innerHTML, /Stocked products/);
+assert.match(panel.shadowRoot.innerHTML, /Type/);
+assert.match(panel.shadowRoot.innerHTML, /Source/);
+assert.match(panel.shadowRoot.innerHTML, /Location/);
+assert.match(panel.shadowRoot.innerHTML, /Rows/);
+assert.match(panel.shadowRoot.innerHTML, /Prepared foods/);
+assert.match(panel.shadowRoot.innerHTML, /Mise inventory/);
+assert.match(panel.shadowRoot.innerHTML, /1-7 of 7 stocked products/);
 assert.match(panel.shadowRoot.innerHTML, /Inventory sources/);
 assert.match(panel.shadowRoot.innerHTML, /Grocy stock/);
 assert.match(panel.shadowRoot.innerHTML, /Last stock write/);
 assert.match(panel.shadowRoot.innerHTML, /Fridge: 2 cans/);
+panel._inventoryFilters = { category: "all", source: "grocy", location: "all" };
+panel._inventoryPage = 1;
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /1-4 of 4 stocked products/);
+assert.match(panel.shadowRoot.innerHTML, /Grocy stock/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Lemons<\/p>/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Salt<\/p>/);
+assert.deepEqual(panel._inventoryFilteredProducts(panel._inventoryProductGroups(panel._data.items).stocked).map((item) => item.label), ["Apples", "Rice", "Tomatoes", "Yogurt"]);
+panel._inventoryFilters = { category: "all", source: "all", location: "all" };
+panel._inventoryPageSize = 5;
+panel._inventoryPage = 1;
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /1-5 of 7 stocked products/);
+assert.deepEqual(panel._inventoryPagedProducts(panel._inventoryProductGroups(panel._data.items).stocked).items.map((item) => item.label), ["Apples", "Lemons", "Rice", "Salt", "Tomato sauce"]);
+panel._inventoryPage = 2;
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /6-7 of 7 stocked products/);
+assert.match(panel.shadowRoot.innerHTML, /Tomato sauce/);
+assert.deepEqual(panel._inventoryPagedProducts(panel._inventoryProductGroups(panel._data.items).stocked).items.map((item) => item.label), ["Tomatoes", "Yogurt"]);
+panel._inventoryPageSize = 10;
+panel._inventoryPage = 1;
+panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Ready to eat soon/);
 assert.match(panel.shadowRoot.innerHTML, /Ready to eat/);
 assert.match(panel.shadowRoot.innerHTML, /Best before 2026-06-22/);
+assert.match(panel.shadowRoot.innerHTML, /Not in freezer for \d+ days/);
 assert.match(panel.shadowRoot.innerHTML, /Beef stew/);
-assert.match(panel.shadowRoot.innerHTML, /Not in freezer since 2026-06-17/);
-assert.match(panel.shadowRoot.innerHTML, /Chicken TV dinner/);
+assert.match(panel.shadowRoot.innerHTML, /Chicken curry \+ Cooked basmati rice \+ Roasted broccoli/);
 assert.match(panel.shadowRoot.innerHTML, /Microwave TV dinner/);
 assert.match(panel.shadowRoot.innerHTML, /data-mark-container-eaten="demo:frozen-tv-dinner"/);
 assert.match(panel.shadowRoot.innerHTML, /Mark eaten/);
@@ -557,18 +712,39 @@ assert.match(panel.shadowRoot.innerHTML, /tv-dinner-dice/);
 assert.match(panel.shadowRoot.innerHTML, /data-tv-dinner-count-step="-1"/);
 assert.match(panel.shadowRoot.innerHTML, /data-tv-dinner-count-step="1"/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /id="tv-dinner-count" type="number"/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /<label class="meal-selector">Meals/);
 await panel._rollTvDinner();
 assert.equal(tvDinnerRequests, 1);
 assert.match(panel.shadowRoot.innerHTML, /2 TV dinners/);
-assert.match(panel.shadowRoot.innerHTML, /data-tv-dinner-meal-container="1"/);
+assert.match(panel.shadowRoot.innerHTML, /data-tv-dinner-ready="1"/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /data-tv-dinner-meal-container="1"/);
 assert.match(panel.shadowRoot.innerHTML, /TV dinner/);
-assert.match(panel.shadowRoot.innerHTML, /tv-dinner-transfer/);
+assert.match(panel.shadowRoot.innerHTML, />Ready<\/button>/);
 assert.match(panel.shadowRoot.innerHTML, /Best-before and variety weighted random assignment/);
 assert.match(panel.shadowRoot.innerHTML, /Meal 1/);
 assert.match(panel.shadowRoot.innerHTML, /Roasted broccoli/);
 assert.match(panel.shadowRoot.innerHTML, /Chicken curry/);
 assert.match(panel.shadowRoot.innerHTML, /Salmon portions/);
-await panel._transferTvDinners();
+assert.match(panel.shadowRoot.innerHTML, /1 portion Chicken curry/);
+assert.match(panel.shadowRoot.innerHTML, /Source: Fridge \/ Top shelf/);
+assert.match(panel.shadowRoot.innerHTML, /Product: poultry · chicken · demo:curry/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Container:/);
+const staleTvDinnerData = structuredClone(panel._data);
+staleTvDinnerData.containers = staleTvDinnerData.containers.map((container) => container.tag_id === "demo:meal-rice"
+  ? { ...container, item_label: "Empty container", quantity: 0, canonical_quantity: 0, content_kind: "empty", recipe: {} }
+  : container);
+assert.deepEqual(panel._tvDinnerTransferMeals(panel._tvDinnerPlan, panel._availableTvDinnerContainers(staleTvDinnerData), staleTvDinnerData), [{
+  meal: 2,
+  complete: true,
+  container_type: "tv_dinner",
+  container_tag_id: "demo:tv-dinner-02",
+  components: {
+    veggie: { tag_id: "demo:braised-greens", label: "Braised greens", quantity: 1 },
+    starch: { tag_id: "demo:sweet-potatoes", label: "Sweet potatoes", quantity: 1 },
+    protein: { tag_id: "demo:salmon", label: "Salmon portions", quantity: 1 },
+  },
+}]);
+await panel._transferTvDinnerMeal("1");
 assert.deepEqual(serviceCalls.at(-1), {
   domain: "mise_en_place_assistant",
   service: "transfer_tv_dinners",
@@ -582,16 +758,6 @@ assert.deepEqual(serviceCalls.at(-1), {
         veggie: { tag_id: "demo:broccoli", label: "Roasted broccoli", quantity: 1 },
         starch: { tag_id: "demo:meal-rice", label: "Cooked basmati rice", quantity: 1 },
         protein: { tag_id: "demo:curry", label: "Chicken curry", quantity: 1 },
-      },
-    }, {
-      meal: 2,
-      complete: true,
-      container_type: "tv_dinner",
-      container_tag_id: "demo:tv-dinner-02",
-      components: {
-        veggie: { tag_id: "demo:braised-greens", label: "Braised greens", quantity: 1 },
-        starch: { tag_id: "demo:sweet-potatoes", label: "Sweet potatoes", quantity: 1 },
-        protein: { tag_id: "demo:salmon", label: "Salmon portions", quantity: 1 },
       },
     }],
   },
@@ -833,8 +999,9 @@ assert.deepEqual(serviceCalls.at(-1), {
   service: "simulate_crud",
   data: {},
 });
+const overviewRequestsBeforeEvent = overviewRequests;
 inventoryUpdated();
 await new Promise((resolve) => setImmediate(resolve));
-assert.equal(overviewRequests, 2, "inventory events refresh the panel immediately");
+assert.equal(overviewRequests, overviewRequestsBeforeEvent + 1, "inventory events refresh the panel immediately");
 panel.disconnectedCallback();
 assert.equal(eventsUnsubscribed, true, "the inventory event subscription is released");

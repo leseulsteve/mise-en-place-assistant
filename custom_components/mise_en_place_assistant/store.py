@@ -2551,7 +2551,11 @@ class MiseEnPlaceAssistantInventory:
                     raise KeyError(tag_id)
                 classification = self._container_meal_classification(source)
                 if classification.get("meal_component_role") != role:
-                    raise ValueError(f"{self.item_label_for_container(source)} is not a {role} component")
+                    label = self.item_label_for_container(source)
+                    actual = classification.get("meal_component_role") or source.get("content_kind") or "unknown"
+                    raise ValueError(
+                        f"TV dinner meal {index} {role} source {tag_id} is no longer available as {role}: {label} is {actual}. Roll again to refresh the plan."
+                    )
                 unit = source.get("unit") or source.get("canonical_unit") or DEFAULT_UNIT
                 if not self._is_portion_unit(unit):
                     raise ValueError(f"{self.item_label_for_container(source)} must use a portion-compatible unit")
@@ -2590,6 +2594,7 @@ class MiseEnPlaceAssistantInventory:
         for meal, target in zip(normalized_meals, targets, strict=True):
             target_tag_id = target["tag_id"]
             shell_name = target.get("container_shell_name") or target.get("name") or self.default_container_name(target_tag_id)
+            meal_label = self._tv_dinner_meal_label(meal["components"])
             await self._async_create_container(
                 tag_id=target_tag_id,
                 name=f"TV dinner {meal['meal']}",
@@ -2597,7 +2602,7 @@ class MiseEnPlaceAssistantInventory:
                 location_id=fridge["id"],
                 unit="portions",
                 item_id="tv_dinner",
-                item_label="TV dinner",
+                item_label=meal_label,
                 item_format="assembled_tv_dinner",
                 source_provider="local",
                 content_kind="meal",
@@ -2613,6 +2618,7 @@ class MiseEnPlaceAssistantInventory:
                     "location_id": fridge["id"],
                     "location": fridge.get("name"),
                     "container_type": "tv dinner",
+                    "label": meal_label,
                     "components": meal["components"],
                 }
             )
@@ -2648,6 +2654,16 @@ class MiseEnPlaceAssistantInventory:
             if len(selected) == len(meals):
                 return selected
         return selected
+
+    @staticmethod
+    def _tv_dinner_meal_label(components: dict[str, dict[str, Any]]) -> str:
+        """Return a meal label from the assembled component names."""
+        labels = [
+            str((components.get(role) or {}).get("label") or "").strip()
+            for role in ("protein", "starch", "veggie")
+        ]
+        labels = [label for label in labels if label]
+        return " + ".join(labels) if labels else "TV dinner"
 
     def _available_tv_dinner_containers(self) -> list[dict[str, Any]]:
         """Return empty reusable TV dinner containers available to fill."""
