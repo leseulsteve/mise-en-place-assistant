@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.20 - 2026-06-20
+
+- Fix complete-meal preview ranking so the panel overview no longer crashes while building TV dinner readiness.
+
 ## 0.0.19 - 2026-06-20
 
 - Add preview-only TV dinner planning with best-before and component-variety weighted dice rolls, plus broader mocked meal-component inventory for exercising complete-meal workflows.
