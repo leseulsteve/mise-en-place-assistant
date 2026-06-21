@@ -118,6 +118,7 @@ panel.hass = {
       source: "grocy",
       quantity: 4,
       unit: "cans",
+      best_before_date: "2026-07-01",
       containers: 1,
       locations: { Fridge: { cans: 2 } },
       physical_containers: [{
@@ -211,6 +212,18 @@ panel.hass = {
       proteins: [],
       grocy_stock: [{ label: "Tomatoes", quantity: "4 cans", containers: 1 }],
     }],
+    recipe_suggestions: [{
+      id: "mocked:recipe:sauce",
+      label: "Tomato sauce",
+      score: 31,
+      matched_count: 1,
+      ingredient_count: 2,
+      missing_count: 1,
+      reason: "Uses Tomatoes before 2026-07-01 and matches 1 stocked ingredients.",
+      matched: [{ label: "Tomatoes", stock_quantity: "4 cans", best_before_date: "2026-07-01" }],
+      missing: [{ label: "Garlic", amount: "2 cloves" }],
+      best_before: [{ label: "Tomatoes", best_before_date: "2026-07-01", status: "soon", days: 10 }],
+    }],
     complete_meal_plan: {
       meal_count: 2,
       status: "ready",
@@ -241,6 +254,7 @@ panel.hass = {
         name: "Meal Prep",
         state: "off",
       }],
+      prep_calendar_entity_id: "calendar.meal_prep",
       calendar_events: [{
         entity_id: "calendar.meal_prep",
         name: "Meal Prep",
@@ -248,6 +262,23 @@ panel.hass = {
         message: "Sunday prep",
         start_time: "2026-06-21 10:00:00",
         end_time: "2026-06-21 12:00:00",
+      }],
+      sessions: [{
+        id: "prep_old",
+        calendar_entity_id: "calendar.meal_prep",
+        summary: "Last prep",
+        start_date_time: "2026-06-14T10:00",
+        end_date_time: "2026-06-14T12:00",
+        status: "past",
+        recipes: [{ id: "mocked:recipe:sauce", label: "Tomato sauce" }],
+      }, {
+        id: "prep_next",
+        calendar_entity_id: "calendar.meal_prep",
+        summary: "Next prep",
+        start_date_time: "2026-06-21T10:00",
+        end_date_time: "2026-06-21T12:00",
+        status: "upcoming",
+        recipes: [{ id: "mocked:recipe:sauce", label: "Tomato sauce" }],
       }],
       provider_roles: {
         schedule: "Home Assistant calendar",
@@ -405,6 +436,9 @@ panel._tab = "planning";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Prepared components vs Grocy stock/);
 assert.match(panel.shadowRoot.innerHTML, /Tomatoes/);
+assert.match(panel.shadowRoot.innerHTML, /Recipe suggestions/);
+assert.match(panel.shadowRoot.innerHTML, /best before 2026-07-01/);
+assert.match(panel.shadowRoot.innerHTML, /Missing or unknown/);
 assert.match(panel.shadowRoot.innerHTML, /Prepared components/);
 assert.match(panel.shadowRoot.innerHTML, /mpa:component:sauce/);
 assert.match(panel.shadowRoot.innerHTML, /Complete meals/);
@@ -419,18 +453,30 @@ assert.doesNotMatch(panel.shadowRoot.innerHTML, /Shopping workflow/);
 panel._tab = "meal-prep";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Meal Prep/);
+assert.match(panel.shadowRoot.innerHTML, /Session Calendar/);
+assert.match(panel.shadowRoot.innerHTML, /Last prep/);
+assert.match(panel.shadowRoot.innerHTML, /Next prep/);
+assert.match(panel.shadowRoot.innerHTML, /Past/);
+assert.match(panel.shadowRoot.innerHTML, /Upcoming/);
 assert.match(panel.shadowRoot.innerHTML, /Home Assistant calendar/);
 assert.match(panel.shadowRoot.innerHTML, /calendar\.meal_prep/);
-assert.match(panel.shadowRoot.innerHTML, /Container readiness/);
-assert.match(panel.shadowRoot.innerHTML, /medium square/);
-assert.match(panel.shadowRoot.innerHTML, /Missing 2/);
-assert.match(panel.shadowRoot.innerHTML, /Storage plan/);
-assert.match(panel.shadowRoot.innerHTML, /Complete meal portions/);
-assert.match(panel.shadowRoot.innerHTML, /Clone session/);
-assert.match(panel.shadowRoot.innerHTML, /Use as base/);
-assert.match(panel.shadowRoot.innerHTML, /Home Assistant calendar/);
-assert.match(panel.shadowRoot.innerHTML, /Mealie/);
-assert.match(panel.shadowRoot.innerHTML, /Grocy/);
+assert.match(panel.shadowRoot.innerHTML, /New prep session/);
+assert.match(panel.shadowRoot.innerHTML, /Recipe chooser/);
+assert.match(panel.shadowRoot.innerHTML, /Recipe rank/);
+assert.match(panel.shadowRoot.innerHTML, /Session details/);
+assert.match(panel.shadowRoot.innerHTML, /Session name/);
+assert.match(panel.shadowRoot.innerHTML, /Scheduled date\/time/);
+assert.match(panel.shadowRoot.innerHTML, /Recipes or meals included/);
+assert.match(panel.shadowRoot.innerHTML, /Number of servings/);
+assert.match(panel.shadowRoot.innerHTML, /Expected finished portions/);
+assert.match(panel.shadowRoot.innerHTML, /Session notes/);
+assert.match(panel.shadowRoot.innerHTML, /Readiness summary/);
+assert.match(panel.shadowRoot.innerHTML, /2 finished portions/);
+assert.match(panel.shadowRoot.innerHTML, /Ingredient readiness/);
+assert.match(panel.shadowRoot.innerHTML, /best before 2026-07-01/);
+panel._selectPrepSession({ dataset: { selectPrepSession: "prep_next" } });
+assert.match(panel.shadowRoot.innerHTML, /Next prep/);
+assert.match(panel.shadowRoot.innerHTML, /Tomato sauce/);
 panel._tab = "attention";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Needs user attention/);
@@ -445,26 +491,41 @@ assert.doesNotMatch(panel.shadowRoot.innerHTML, /Configure Mealie/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /not configured/);
 panel._tab = "meal-prep";
 panel._render();
-panel._clonePrepSession({ dataset: { templateName: "2 complete meals" } });
-assert.match(panel.shadowRoot.innerHTML, /value="Clone: 2 complete meals"/);
 const prepForm = {
   elements: {
     entity_id: { value: "calendar.meal_prep" },
-    summary: { value: "Clone: 2 complete meals" },
+    summary: { value: "Sunday prep" },
     start_date_time: { value: "2026-06-21T10:00" },
     end_date_time: { value: "2026-06-21T12:00" },
     description: { value: "Created from test" },
   },
+  querySelectorAll(selector) {
+    return selector === 'input[name="recipe_ids"]:checked'
+      ? [{ value: "mocked:recipe:sauce" }]
+      : [];
+  },
 };
 await panel._createMealPrepCalendarEvent({ preventDefault() {}, currentTarget: prepForm });
-assert.deepEqual(serviceCalls.at(-1), {
+assert.deepEqual(serviceCalls.at(-2), {
   domain: "calendar",
   service: "create_event",
   data: {
     entity_id: "calendar.meal_prep",
-    summary: "Clone: 2 complete meals",
+    summary: "Sunday prep",
     start_date_time: "2026-06-21T10:00",
     end_date_time: "2026-06-21T12:00",
+    description: "Created from test",
+  },
+});
+assert.deepEqual(serviceCalls.at(-1), {
+  domain: "mise_en_place_assistant",
+  service: "create_prep_session",
+  data: {
+    calendar_entity_id: "calendar.meal_prep",
+    name: "Sunday prep",
+    start_date_time: "2026-06-21T10:00",
+    end_date_time: "2026-06-21T12:00",
+    recipe_ids: ["mocked:recipe:sauce"],
     description: "Created from test",
   },
 });

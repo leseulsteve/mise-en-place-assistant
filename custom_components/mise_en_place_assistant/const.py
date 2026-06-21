@@ -13,6 +13,7 @@ CONF_M5DIAL_SERVICE_PREFIX = "m5dial_service_prefix"
 CONF_M5DIAL_DEVICE_ID = "m5dial_device_id"
 CONF_M5DIAL_EVENT_SOURCE = "m5dial_event_source"
 CONF_M5DIAL_PRESENCE_ENTITY_IDS = "m5dial_presence_entity_ids"
+CONF_PREP_CALENDAR_ENTITY_ID = "prep_calendar_entity_id"
 CONF_MEALIE_URL = "mealie_url"
 CONF_MEALIE_TOKEN = "mealie_token"
 CONF_MEALIE_ENTRY_ID = "mealie_entry_id"
@@ -69,6 +70,7 @@ SERVICE_ADD_EMPTY_CONTAINERS_TO_SHOPPING_LIST = "add_empty_containers_to_shoppin
 SERVICE_ADD_MISSING_PRODUCTS_TO_SHOPPING_LIST = "add_missing_products_to_shopping_list"
 SERVICE_UPDATE_PRODUCT_METADATA = "update_product_metadata"
 SERVICE_PLAN_COMPLETE_MEALS = "plan_complete_meals"
+SERVICE_CREATE_PREP_SESSION = "create_prep_session"
 
 SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED = "mise_en_place_assistant_entity_added"
 

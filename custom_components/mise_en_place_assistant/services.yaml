@@ -443,3 +443,30 @@ plan_complete_meals:
           min: 1
           step: 1
           mode: box
+
+create_prep_session:
+  description: Store meal-prep session details after Home Assistant calendar scheduling succeeds.
+  fields:
+    calendar_entity_id:
+      required: true
+      selector:
+        entity:
+          domain: calendar
+    name:
+      required: true
+      selector:
+        text:
+    start_date_time:
+      required: true
+      selector:
+        text:
+    end_date_time:
+      required: true
+      selector:
+        text:
+    recipe_ids:
+      selector:
+        object:
+    description:
+      selector:
+        text:

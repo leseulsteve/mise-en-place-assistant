@@ -151,6 +151,7 @@ class MiseEnPlaceAssistantInventory:
             "stock": [],
             "storage_locations": [],
             "product_metadata": {},
+            "prep_sessions": [],
             "dial_theme": DEFAULT_DIAL_THEME,
         }
         self._listeners: list[Callable[[], None]] = []
@@ -193,7 +194,7 @@ class MiseEnPlaceAssistantInventory:
     def _ensure_schema(self) -> bool:
         """Ensure old Mise en Place Assistant data remains usable by the reusable-container model."""
         changed = False
-        for key, default in (("items", {}), ("products", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {}), ("catalog", []), ("recipes", []), ("stock", []), ("storage_locations", []), ("product_metadata", {}), ("dial_theme", DEFAULT_DIAL_THEME)):
+        for key, default in (("items", {}), ("products", {}), ("containers", {}), ("locations", {}), ("logbook", []), ("devices", {}), ("catalog", []), ("recipes", []), ("stock", []), ("storage_locations", []), ("product_metadata", {}), ("prep_sessions", []), ("dial_theme", DEFAULT_DIAL_THEME)):
             if key not in self.data:
                 self.data[key] = default
                 changed = True
@@ -419,6 +420,11 @@ class MiseEnPlaceAssistantInventory:
     @property
     def devices(self) -> dict[str, dict[str, Any]]:
         return self.data.setdefault("devices", {})
+
+    def prep_sessions(self) -> list[dict[str, Any]]:
+        """Return locally stored prep-session details."""
+        sessions = self.data.setdefault("prep_sessions", [])
+        return sessions if isinstance(sessions, list) else []
 
     def default_container_name(self, tag_id: str) -> str:
         """Return a stable, contents-independent container label."""
@@ -1896,6 +1902,66 @@ class MiseEnPlaceAssistantInventory:
         await self.async_save()
         return {"steps": steps, "tag_id": tag_id}
 
+    async def async_create_prep_session(
+        self,
+        *,
+        calendar_entity_id: str,
+        summary: str,
+        start_date_time: str,
+        end_date_time: str,
+        recipe_ids: list[str],
+        description: str = "",
+    ) -> dict[str, Any]:
+        """Store meal-prep details while Home Assistant calendar owns scheduling."""
+        calendar_entity_id = str(calendar_entity_id or "").strip()
+        if not calendar_entity_id.startswith("calendar."):
+            raise ValueError("Prep session calendar must be a Home Assistant calendar entity")
+        summary = str(summary or "").strip()
+        if not summary:
+            raise ValueError("Prep session summary is required")
+        if not start_date_time or not end_date_time:
+            raise ValueError("Prep session start and end times are required")
+        recipes_by_id = {str(recipe.get("id")): recipe for recipe in self.recipe_items() if recipe.get("id")}
+        selected_recipes = []
+        for recipe_id in recipe_ids:
+            recipe_id = str(recipe_id or "").strip()
+            if not recipe_id:
+                continue
+            recipe = recipes_by_id.get(recipe_id)
+            if not recipe:
+                raise ValueError("Selected prep recipe no longer exists in the configured catalog")
+            selected_recipes.append(
+                {
+                    "id": recipe_id,
+                    "label": recipe.get("label") or recipe_id,
+                    "provider": recipe.get("provider") or "",
+                }
+            )
+        now = _utc_now()
+        session = {
+            "id": f"prep_{uuid4().hex}",
+            "calendar_entity_id": calendar_entity_id,
+            "summary": summary,
+            "start_date_time": str(start_date_time),
+            "end_date_time": str(end_date_time),
+            "description": str(description or "").strip(),
+            "recipes": selected_recipes,
+            "created_at": now,
+            "updated_at": now,
+        }
+        self.prep_sessions().append(session)
+        self._add_log_entry(
+            "Prep session created",
+            f"{summary} was linked to {calendar_entity_id}.",
+            {
+                "session_id": session["id"],
+                "calendar_entity_id": calendar_entity_id,
+                "recipe_ids": [recipe["id"] for recipe in selected_recipes],
+            },
+        )
+        await self.async_save()
+        return session
+
     def _kitchenowl_client(self) -> KitchenOwlShoppingClient:
         """Return a KitchenOwl client from validated config-entry data."""
         url = self.entry.options.get(CONF_KITCHENOWL_URL, self.entry.data.get(CONF_KITCHENOWL_URL, ""))
@@ -2142,12 +2208,21 @@ class MiseEnPlaceAssistantInventory:
                 },
             )
             quantity = stock.get("quantity", 0) if stock else 0
+            best_before_date = (
+                stock.get("best_before_date")
+                or stock.get("next_best_before_date")
+                or stock.get("due_date")
+                or stock.get("next_due_date")
+                if stock
+                else None
+            )
             total.update(
                 {
                     "unit": product.get("unit") or DEFAULT_UNIT,
                     "quantity": quantity,
                     "quantities": {product.get("unit") or DEFAULT_UNIT: quantity},
                     "source": "grocy",
+                    "best_before_date": best_before_date,
                 }
             )
         for container in self.active_containers():
@@ -2169,6 +2244,10 @@ class MiseEnPlaceAssistantInventory:
             location = container.get("location") or "Unassigned"
             location_totals = total["locations"].setdefault(location, {})
             location_totals[unit] = location_totals.get(unit, 0) + amount
+            if container.get("best_before_date"):
+                best_before = total.get("best_before_date")
+                if not best_before or str(container["best_before_date"]) < str(best_before):
+                    total["best_before_date"] = container["best_before_date"]
         for total in totals.values():
             if len(total["quantities"]) == 1:
                 total["unit"], total["quantity"] = next(iter(total["quantities"].items()))

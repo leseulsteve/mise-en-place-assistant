@@ -25,6 +25,7 @@ from .const import (
     CONF_M5DIAL_DEVICE_ID,
     CONF_M5DIAL_EVENT_SOURCE,
     CONF_M5DIAL_PRESENCE_ENTITY_IDS,
+    CONF_PREP_CALENDAR_ENTITY_ID,
     CONF_MEALIE_TOKEN,
     CONF_MEALIE_ENTRY_ID,
     CONF_MEALIE_URL,
@@ -162,6 +163,15 @@ def _presence_entity_selector():
     )
 
 
+def _calendar_entity_selector():
+    """Return the Home Assistant calendar selector for prep sessions."""
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            domain=["calendar"],
+        )
+    )
+
+
 def _entity_ids(value) -> list[str]:
     """Normalize a selector value to unique Home Assistant entity IDs."""
     if value in (None, ""):
@@ -179,6 +189,12 @@ def _optional_device_field(default: str | None = None):
     """Return a device selector field without serializing a None default."""
     kwargs = {"default": default} if default else {}
     return vol.Optional(CONF_M5DIAL_DEVICE_ID, **kwargs)
+
+
+def _optional_calendar_field(default: str | None = None):
+    """Return the prep calendar field without serializing a None default."""
+    kwargs = {"default": default} if default else {}
+    return vol.Optional(CONF_PREP_CALENDAR_ENTITY_ID, **kwargs)
 
 
 def _optional_kitchenowl_list_field(default: int | None = None):
@@ -202,6 +218,16 @@ def _provider_url_value(user_input: dict, key: str, current: str, dev_mode: bool
 def _hidden_value(user_input: dict, key: str, current):
     """Preserve a stored option when its form field is hidden."""
     return current if key not in user_input else user_input.get(key)
+
+
+def _optional_entity_id(value) -> str:
+    """Normalize an optional Home Assistant entity ID."""
+    if value in (None, ""):
+        return ""
+    entity_id = cv.entity_id(value)
+    if not entity_id.startswith("calendar."):
+        raise vol.Invalid("value must be a calendar entity")
+    return entity_id
 
 
 def _kitchenowl_selected(user_input: dict, current: str = SHOPPING_LIST_PROVIDER_AUTO) -> bool:
@@ -241,6 +267,9 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             try:
                 _validate_provider_choice(providers, dev_mode)
                 _validate_kitchenowl_config(user_input, dev_mode)
+                prep_calendar_entity_id = _optional_entity_id(
+                    user_input.get(CONF_PREP_CALENDAR_ENTITY_ID)
+                )
             except vol.Invalid:
                 return self.async_show_form(
                     step_id="user",
@@ -255,6 +284,7 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_M5DIAL_PRESENCE_ENTITY_IDS: _entity_ids(
                     user_input.get(CONF_M5DIAL_PRESENCE_ENTITY_IDS)
                 ),
+                CONF_PREP_CALENDAR_ENTITY_ID: prep_calendar_entity_id,
                 CONF_CATALOG_PROVIDERS: providers,
                 CONF_DEV_MODE: dev_mode,
                 CONF_SHOPPING_LIST_PROVIDER: user_input.get(
@@ -290,6 +320,9 @@ class MiseEnPlaceAssistantConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_M5DIAL_PRESENCE_ENTITY_IDS,
                 default=form_input.get(CONF_M5DIAL_PRESENCE_ENTITY_IDS, []),
             ): _presence_entity_selector(),
+            _optional_calendar_field(
+                form_input.get(CONF_PREP_CALENDAR_ENTITY_ID)
+            ): _calendar_entity_selector(),
             vol.Optional(
                 CONF_SHOPPING_LIST_PROVIDER,
                 default=form_input.get(CONF_SHOPPING_LIST_PROVIDER, SHOPPING_LIST_PROVIDER_AUTO),
@@ -474,6 +507,10 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
             CONF_M5DIAL_PRESENCE_ENTITY_IDS,
             self.config_entry.data.get(CONF_M5DIAL_PRESENCE_ENTITY_IDS, []),
         )
+        current_prep_calendar = self.config_entry.options.get(
+            CONF_PREP_CALENDAR_ENTITY_ID,
+            self.config_entry.data.get(CONF_PREP_CALENDAR_ENTITY_ID),
+        )
         current_mealie_url = self.config_entry.options.get(
             CONF_MEALIE_URL, self.config_entry.data.get(CONF_MEALIE_URL, "")
         )
@@ -519,6 +556,9 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
                     _grocy_url(user_input.get(CONF_GROCY_URL, ""))
                     _required_text(user_input.get(CONF_GROCY_TOKEN, ""))
                 _validate_kitchenowl_config(user_input, dev_mode)
+                prep_calendar_entity_id = _optional_entity_id(
+                    user_input.get(CONF_PREP_CALENDAR_ENTITY_ID)
+                )
             except vol.Invalid:
                 errors["base"] = "provider_required" if not dev_mode and set(providers) != set(CATALOG_PROVIDERS) else "invalid_provider_connection"
             else:
@@ -532,6 +572,7 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
                         CONF_M5DIAL_PRESENCE_ENTITY_IDS: _entity_ids(
                             user_input.get(CONF_M5DIAL_PRESENCE_ENTITY_IDS)
                         ),
+                        CONF_PREP_CALENDAR_ENTITY_ID: prep_calendar_entity_id,
                         CONF_MEALIE_URL: _provider_url_value(user_input, CONF_MEALIE_URL, current_mealie_url, dev_mode),
                         CONF_MEALIE_TOKEN: _provider_url_value(user_input, CONF_MEALIE_TOKEN, current_mealie_token, dev_mode).strip(),
                         CONF_GROCY_URL: _provider_url_value(user_input, CONF_GROCY_URL, current_grocy_url, dev_mode),
@@ -561,6 +602,7 @@ class MiseEnPlaceAssistantOptionsFlow(config_entries.OptionsFlow):
                 CONF_M5DIAL_PRESENCE_ENTITY_IDS,
                 default=current_presence_entities,
             ): _presence_entity_selector(),
+            _optional_calendar_field(current_prep_calendar): _calendar_entity_selector(),
             vol.Optional(CONF_SHOPPING_LIST_PROVIDER, default=visible_shopping_provider): _shopping_provider_selector(),
         }
         if visible_shopping_provider == PROVIDER_KITCHENOWL:

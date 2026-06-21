@@ -17,6 +17,7 @@ from .units import normalized_inventory_unit
 
 _LOGGER = logging.getLogger(__name__)
 _REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=10)
+_MAX_RECIPE_DETAILS = 75
 _GROCY_PRODUCT_EXTRA_KEY = "mise_en_place_grocy_product_id"
 _SYNC_SOURCE_EXTRA_KEY = "mise_en_place_source"
 
@@ -108,17 +109,25 @@ class MealieCatalogClient:
             raise MealieCatalogError("Mealie returned an invalid recipe catalog")
 
         recipes: list[dict[str, Any]] = []
-        for recipe in records:
+        for index, recipe in enumerate(records):
             if not isinstance(recipe, dict):
                 continue
             recipe_id = str(recipe.get("id") or "").strip()
             label = str(recipe.get("name") or "").strip()
             if not recipe_id or not label:
                 continue
+            detail = recipe
+            if index < _MAX_RECIPE_DETAILS:
+                lookup = str(recipe.get("slug") or recipe_id).strip()
+                if lookup:
+                    try:
+                        detail = await self._async_get_one(f"recipes/{lookup}")
+                    except (aiohttp.ClientError, TimeoutError, ValueError):
+                        _LOGGER.debug("Could not fetch Mealie recipe details for %s", lookup, exc_info=True)
             tags = sorted(
                 {
                     str(tag.get("name") or "").strip()
-                    for tag in recipe.get("tags", [])
+                    for tag in detail.get("tags", recipe.get("tags", []))
                     if isinstance(tag, dict) and str(tag.get("name") or "").strip()
                 },
                 key=str.casefold,
@@ -126,7 +135,7 @@ class MealieCatalogClient:
             categories = sorted(
                 {
                     str(category.get("name") or "").strip()
-                    for category in (recipe.get("recipeCategory") or recipe.get("categories") or [])
+                    for category in (detail.get("recipeCategory") or detail.get("categories") or [])
                     if isinstance(category, dict) and str(category.get("name") or "").strip()
                 },
                 key=str.casefold,
@@ -136,7 +145,9 @@ class MealieCatalogClient:
                     "id": recipe_id,
                     "label": label,
                     "format": str(recipe.get("description") or "").strip(),
-                    "unit": self._recipe_yield_unit(recipe),
+                    "unit": self._recipe_yield_unit(detail),
+                    "slug": str(recipe.get("slug") or "").strip(),
+                    "ingredients": self._recipe_ingredients(detail),
                     "tags": tags,
                     "categories": categories,
                     "provider": "mealie_recipe",
@@ -218,6 +229,42 @@ class MealieCatalogClient:
             return match.group(1)
         return "servings"
 
+    @staticmethod
+    def _recipe_ingredients(recipe: dict[str, Any]) -> list[dict[str, Any]]:
+        """Return normalized Mealie recipe ingredients for local stock scoring."""
+        ingredients: list[dict[str, Any]] = []
+        for row in recipe.get("recipeIngredient") or recipe.get("ingredients") or []:
+            if not isinstance(row, dict):
+                continue
+            food = row.get("food") if isinstance(row.get("food"), dict) else {}
+            unit = row.get("unit") if isinstance(row.get("unit"), dict) else {}
+            label = str(
+                food.get("name")
+                or row.get("foodName")
+                or row.get("title")
+                or row.get("note")
+                or row.get("originalText")
+                or ""
+            ).strip()
+            original = str(row.get("originalText") or row.get("note") or label).strip()
+            food_id = str(food.get("id") or row.get("foodId") or "").strip()
+            extras = food.get("extras") if isinstance(food.get("extras"), dict) else {}
+            grocy_product_id = str(extras.get(_GROCY_PRODUCT_EXTRA_KEY) or "").strip()
+            if not label and not original:
+                continue
+            ingredients.append(
+                {
+                    "food_id": food_id,
+                    "grocy_product_id": grocy_product_id,
+                    "label": label or original,
+                    "quantity": row.get("quantity"),
+                    "unit": str(unit.get("name") or row.get("unitName") or "").strip(),
+                    "note": str(row.get("note") or "").strip(),
+                    "original": original,
+                }
+            )
+        return ingredients
+
     async def _async_get_all(self, resource: str) -> Any:
         """Fetch one Mealie catalog resource with a bounded timeout."""
         async with self._session.get(
@@ -228,6 +275,19 @@ class MealieCatalogClient:
         ) as response:
             response.raise_for_status()
             return await response.json(content_type=None)
+
+    async def _async_get_one(self, resource: str) -> dict[str, Any]:
+        """Fetch one Mealie detail resource with a bounded timeout."""
+        async with self._session.get(
+            f"{self._base_url}/api/{resource}",
+            headers={"Authorization": f"Bearer {self._token}"},
+            timeout=_REQUEST_TIMEOUT,
+        ) as response:
+            response.raise_for_status()
+            payload = await response.json(content_type=None)
+            if not isinstance(payload, dict):
+                raise ValueError("Mealie returned an invalid recipe detail")
+            return payload
 
     async def _async_post(self, resource: str, payload: dict[str, Any]) -> Any:
         """Create one Mealie resource with a bounded timeout."""

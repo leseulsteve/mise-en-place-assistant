@@ -36,6 +36,7 @@ from .const import (
     SERVICE_ADD_EMPTY_CONTAINERS_TO_SHOPPING_LIST,
     SERVICE_ADD_MISSING_PRODUCTS_TO_SHOPPING_LIST,
     SERVICE_ADD_TO_SHOPPING_LIST,
+    SERVICE_CREATE_PREP_SESSION,
     SERVICE_PLAN_COMPLETE_MEALS,
     SERVICE_UPDATE_PRODUCT_METADATA,
     SERVICE_CREATE_RECIPE_CONTAINER,
@@ -95,6 +96,10 @@ ATTR_MEAL_COMPONENT_ROLE = "meal_component_role"
 ATTR_MEAL_COMPONENT_FAMILY = "meal_component_family"
 ATTR_MEAL_COMPONENT_DETAIL = "meal_component_detail"
 ATTR_MEAL_COUNT = "meal_count"
+ATTR_CALENDAR_ENTITY_ID = "calendar_entity_id"
+ATTR_START_DATE_TIME = "start_date_time"
+ATTR_END_DATE_TIME = "end_date_time"
+ATTR_RECIPE_IDS = "recipe_ids"
 ATTR_AVAILABLE_IN_MEALIE = "available_in_mealie"
 ATTR_REQUEST_ID = "request_id"
 ATTR_SOURCE_PROVIDER = "source_provider"
@@ -440,6 +445,19 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             raise ServiceValidationError(str(err)) from err
         hass.bus.async_fire(EVENT_MISE_EN_PLACE_ASSISTANT_COMPLETE_MEAL_PLAN, plan)
 
+    async def handle_create_prep_session(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_create_prep_session(
+                calendar_entity_id=call.data[ATTR_CALENDAR_ENTITY_ID],
+                summary=call.data[ATTR_NAME],
+                start_date_time=call.data[ATTR_START_DATE_TIME],
+                end_date_time=call.data[ATTR_END_DATE_TIME],
+                recipe_ids=call.data.get(ATTR_RECIPE_IDS, []),
+                description=call.data.get(ATTR_DESCRIPTION, ""),
+            )
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_CREATE_LOCATION,
@@ -659,6 +677,21 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         SERVICE_PLAN_COMPLETE_MEALS,
         handle_plan_complete_meals,
         schema=vol.Schema({vol.Optional(ATTR_MEAL_COUNT, default=1): _positive_number}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_CREATE_PREP_SESSION,
+        handle_create_prep_session,
+        schema=vol.Schema(
+            {
+                vol.Required(ATTR_CALENDAR_ENTITY_ID): cv.string,
+                vol.Required(ATTR_NAME): cv.string,
+                vol.Required(ATTR_START_DATE_TIME): cv.string,
+                vol.Required(ATTR_END_DATE_TIME): cv.string,
+                vol.Optional(ATTR_RECIPE_IDS, default=[]): vol.All(cv.ensure_list, [cv.string]),
+                vol.Optional(ATTR_DESCRIPTION, default=""): cv.string,
+            }
+        ),
     )
     _LOGGER.debug("Registered Mise en Place Assistant services")
     return True

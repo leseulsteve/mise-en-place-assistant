@@ -16,7 +16,7 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 
-from .const import DOMAIN, PANEL_URL_PATH, VOID_LOCATION_ID
+from .const import CONF_PREP_CALENDAR_ENTITY_ID, DOMAIN, PANEL_URL_PATH, VOID_LOCATION_ID
 from .store import MiseEnPlaceAssistantInventory
 
 _LOGGER = logging.getLogger(__name__)
@@ -242,8 +242,15 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory, meal_count: int = 1) 
         logbook=manager.logbook,
     )
     complete_meal_plan = manager.complete_meal_plan(meal_count)
+    recipe_suggestions = _recipe_suggestions_data(
+        recipes=recipes,
+        item_totals=item_totals,
+        containers=containers,
+        logbook=manager.logbook,
+    )
     meal_prep = _meal_prep_data(
         hass=manager.hass,
+        manager=manager,
         containers=containers,
         complete_meal_plan=complete_meal_plan,
         readiness=readiness,
@@ -269,6 +276,7 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory, meal_count: int = 1) 
             "product_attention": len(product_attention),
             "foods": len(foods),
             "recipes": len(recipes),
+            "recipe_suggestions": len(recipe_suggestions),
             "ready": len(readiness["ready"]),
             "missing": len(readiness["missing"]),
             "unassigned": len(readiness["unassigned"]),
@@ -282,6 +290,7 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory, meal_count: int = 1) 
         "recipes": recipes,
         "meal_inventory": manager.meal_inventory(),
         "complete_meal_plan": complete_meal_plan,
+        "recipe_suggestions": recipe_suggestions,
         "meal_prep": meal_prep,
         "readiness": readiness,
         "planning_comparison": planning_comparison,
@@ -343,6 +352,7 @@ def _calendar_options(hass: HomeAssistant) -> list[dict[str, Any]]:
 def _meal_prep_data(
     *,
     hass: HomeAssistant,
+    manager: MiseEnPlaceAssistantInventory,
     containers: list[dict[str, Any]],
     complete_meal_plan: dict[str, Any],
     readiness: dict[str, Any],
@@ -351,11 +361,16 @@ def _meal_prep_data(
     """Build a provider-backed meal-prep session preview for the panel."""
     meal_count = max(1, int(complete_meal_plan.get("meal_count") or 1))
     calendar_options = _calendar_options(hass)
+    prep_calendar_entity_id = manager.entry.options.get(
+        CONF_PREP_CALENDAR_ENTITY_ID,
+        manager.entry.data.get(CONF_PREP_CALENDAR_ENTITY_ID, ""),
+    )
     calendar_events = [
         calendar
         for calendar in calendar_options
         if calendar.get("state") == "on" or calendar.get("message")
     ][:6]
+    sessions = _prep_session_rows(manager.prep_sessions())
     storage_plan = _meal_prep_storage_plan(complete_meal_plan)
     required_containers: dict[str, int] = {}
     for row in storage_plan:
@@ -396,7 +411,9 @@ def _meal_prep_data(
         "status": status,
         "meal_count": meal_count,
         "calendar_entities": calendar_options,
+        "prep_calendar_entity_id": prep_calendar_entity_id,
         "calendar_events": calendar_events,
+        "sessions": sessions,
         "storage_plan": storage_plan,
         "container_plan": container_plan,
         "required_container_types": MEAL_PREP_CONTAINER_TYPES,
@@ -423,7 +440,7 @@ def _meal_prep_data(
             }
         ],
         "checklist": [
-            "Pick a Home Assistant calendar and schedule the prep block",
+            "Schedule the prep block in the configured Home Assistant calendar",
             "Queue missing ingredients through Grocy or the configured shopping provider",
             "Pull storage containers by type",
             "Wash or free any missing containers",
@@ -431,6 +448,33 @@ def _meal_prep_data(
             "Label containers with destination and eat-by date",
         ],
     }
+
+
+def _prep_session_rows(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return recent and upcoming prep sessions for the mini calendar."""
+    today = date.today().isoformat()
+    rows = []
+    for session in sessions:
+        if not isinstance(session, dict):
+            continue
+        start = str(session.get("start_date_time") or "")
+        rows.append(
+            {
+                "id": session.get("id") or "",
+                "calendar_entity_id": session.get("calendar_entity_id") or "",
+                "summary": session.get("summary") or "Meal prep session",
+                "start_date_time": start,
+                "end_date_time": session.get("end_date_time") or "",
+                "description": session.get("description") or "",
+                "recipes": session.get("recipes") if isinstance(session.get("recipes"), list) else [],
+                "status": "past" if start[:10] and start[:10] < today else "upcoming",
+            }
+        )
+    past = [row for row in rows if row["status"] == "past"]
+    upcoming = [row for row in rows if row["status"] != "past"]
+    past = sorted(past, key=lambda row: row["start_date_time"], reverse=True)[:4]
+    upcoming = sorted(upcoming, key=lambda row: row["start_date_time"])[:8]
+    return sorted(past + upcoming, key=lambda row: row["start_date_time"] or "")
 
 
 def _meal_prep_storage_plan(complete_meal_plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1020,6 +1064,159 @@ def _date_in_range(value: Any, start: date, end: date) -> bool:
     except ValueError:
         return False
     return start <= parsed <= end
+
+
+def _recipe_suggestions_data(
+    *,
+    recipes: list[dict[str, Any]],
+    item_totals: list[dict[str, Any]],
+    containers: list[dict[str, Any]],
+    logbook: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Score Mealie recipes against Grocy/Mise stock, prioritizing best-before dates."""
+    stocked = [item for item in item_totals if _as_float(item.get("quantity")) > 0 or item.get("quantities")]
+    suggestions: list[dict[str, Any]] = []
+    for recipe in recipes:
+        ingredients = [
+            ingredient
+            for ingredient in recipe.get("ingredients") or []
+            if isinstance(ingredient, dict) and (ingredient.get("label") or ingredient.get("original"))
+        ]
+        if not ingredients:
+            continue
+        matched: list[dict[str, Any]] = []
+        missing: list[dict[str, Any]] = []
+        best_before: list[dict[str, Any]] = []
+        score = 0
+        for ingredient in ingredients:
+            stock = _ingredient_stock_match(ingredient, stocked)
+            if not stock:
+                missing.append(_recipe_ingredient_summary(ingredient))
+                continue
+            urgency = _best_before_urgency(stock.get("best_before_date"))
+            matched.append(
+                {
+                    **_recipe_ingredient_summary(ingredient),
+                    "stock_label": stock.get("label") or "",
+                    "stock_quantity": _stock_quantity_label(stock),
+                    "best_before_date": stock.get("best_before_date") or "",
+                    "best_before_status": urgency["status"],
+                }
+            )
+            score += 10 + urgency["score"]
+            if urgency["status"] in {"due", "soon", "stale"}:
+                best_before.append(
+                    {
+                        "label": stock.get("label") or ingredient.get("label") or "Ingredient",
+                        "best_before_date": stock.get("best_before_date"),
+                        "status": urgency["status"],
+                        "days": urgency["days"],
+                    }
+                )
+        if not matched:
+            continue
+        coverage = len(matched) / len(ingredients)
+        score += round(coverage * 20)
+        if missing:
+            score -= len(missing) * 4
+        suggestions.append(
+            {
+                "id": recipe.get("id") or recipe.get("slug") or recipe.get("label"),
+                "label": recipe.get("label") or "Recipe",
+                "provider": recipe.get("provider") or "",
+                "score": score,
+                "coverage": round(coverage, 2),
+                "matched_count": len(matched),
+                "ingredient_count": len(ingredients),
+                "missing_count": len(missing),
+                "matched": matched[:6],
+                "missing": missing[:6],
+                "best_before": best_before[:4],
+                "reason": _recipe_suggestion_reason(matched, missing, best_before),
+                "log": _log_summary(_related_log(logbook, recipe.get("label") or "", "recipe", "stock")),
+            }
+        )
+    return sorted(suggestions, key=lambda row: (-row["score"], row["label"].casefold()))[:8]
+
+
+def _ingredient_stock_match(ingredient: dict[str, Any], stocked: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the best stock row for one recipe ingredient."""
+    ids = {
+        str(value).casefold()
+        for value in (ingredient.get("grocy_product_id"), ingredient.get("food_id"))
+        if value
+    }
+    if ids:
+        for item in stocked:
+            item_id = str(item.get("item_id") or "").casefold()
+            if item_id in ids:
+                return item
+    ingredient_tokens = {
+        token for token in _word_tokens(f"{ingredient.get('label', '')} {ingredient.get('original', '')}") if len(token) > 2
+    }
+    if not ingredient_tokens:
+        return None
+    best_item: dict[str, Any] | None = None
+    best_overlap = 0
+    for item in stocked:
+        label_tokens = {token for token in _word_tokens(item.get("label") or "") if len(token) > 2}
+        overlap = len(ingredient_tokens & label_tokens)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_item = item
+    return best_item if best_overlap else None
+
+
+def _recipe_ingredient_summary(ingredient: dict[str, Any]) -> dict[str, Any]:
+    """Return panel-safe ingredient text."""
+    quantity = ingredient.get("quantity")
+    amount = f"{quantity:g}" if isinstance(quantity, (int, float)) else str(quantity or "").strip()
+    unit = str(ingredient.get("unit") or "").strip()
+    return {
+        "label": ingredient.get("label") or ingredient.get("original") or "Ingredient",
+        "amount": " ".join(part for part in (amount, unit) if part),
+        "original": ingredient.get("original") or "",
+    }
+
+
+def _stock_quantity_label(stock: dict[str, Any]) -> str:
+    """Return a compact stock quantity label."""
+    if stock.get("quantity") is not None and stock.get("unit"):
+        return f"{stock.get('quantity')} {stock.get('unit')}".strip()
+    return _format_quantities(stock.get("quantities") or {})
+
+
+def _best_before_urgency(value: Any) -> dict[str, Any]:
+    """Return score and status for a Grocy/Mise best-before date."""
+    if not value:
+        return {"score": 0, "status": "", "days": None}
+    try:
+        days = (date.fromisoformat(str(value)) - date.today()).days
+    except ValueError:
+        return {"score": 0, "status": "", "days": None}
+    if days < 0:
+        return {"score": 6, "status": "stale", "days": days}
+    if days <= 1:
+        return {"score": 8, "status": "due", "days": days}
+    if days <= 3:
+        return {"score": 6, "status": "soon", "days": days}
+    if days <= 7:
+        return {"score": 3, "status": "upcoming", "days": days}
+    return {"score": 0, "status": "", "days": days}
+
+
+def _recipe_suggestion_reason(
+    matched: list[dict[str, Any]],
+    missing: list[dict[str, Any]],
+    best_before: list[dict[str, Any]],
+) -> str:
+    """Explain why a recipe was suggested."""
+    if best_before:
+        first = best_before[0]
+        return f"Uses {first.get('label') or 'stock'} before {first.get('best_before_date')} and matches {len(matched)} stocked ingredients."
+    if missing:
+        return f"Matches {len(matched)} stocked ingredients; {len(missing)} ingredients still need shopping or review."
+    return f"All {len(matched)} known ingredients are stocked."
 
 
 def _planning_comparison_data(

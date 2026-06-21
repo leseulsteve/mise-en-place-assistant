@@ -106,7 +106,14 @@ class GrocyCatalogClient:
                 amount = float(amount or 0)
             except (TypeError, ValueError):
                 continue
-            records.append({"id": f"grocy:{product_id}", "quantity": int(amount) if amount.is_integer() else amount})
+            record: dict[str, Any] = {
+                "id": f"grocy:{product_id}",
+                "quantity": int(amount) if amount.is_integer() else amount,
+            }
+            for key in ("best_before_date", "next_best_before_date", "due_date", "next_due_date"):
+                if row.get(key):
+                    record[key] = row[key]
+            records.append(record)
         return records
 
     async def async_fetch_locations(self) -> list[dict[str, Any]]:
