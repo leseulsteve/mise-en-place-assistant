@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.22 - 2026-06-21
+
+- Add per-meal TV dinner assembly with source product/location details, stale-source validation, assembled meal labels, and paged inventory filtering, because dinner containers should not need a tiny logistics department.
+
 ## 0.0.21 - 2026-06-20
 
 - Add TV dinner lifecycle services and freshness-aware ready-to-eat tracking, because assembled meals should not have to cosplay as vague inventory blobs forever.
