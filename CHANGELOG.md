@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.19 - 2026-06-20
+
+- Add preview-only TV dinner planning with best-before and component-variety weighted dice rolls, plus broader mocked meal-component inventory for exercising complete-meal workflows.
+
 ## 0.0.18 - 2026-06-20
 
 - Add configured Home Assistant prep-session scheduling, stored Mise session details, Mealie ingredient scoring, and selected-session readiness summaries, because calendar events without recipe context were just timestamps doing meal-prep cosplay.
