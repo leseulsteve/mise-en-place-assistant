@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.21 - 2026-06-20
+
+- Add TV dinner lifecycle services and freshness-aware ready-to-eat tracking, because assembled meals should not have to cosplay as vague inventory blobs forever.
+
 ## 0.0.20 - 2026-06-20
 
 - Fix complete-meal preview ranking so the panel overview no longer crashes while building TV dinner readiness.
