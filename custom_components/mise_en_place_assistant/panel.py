@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import date, timedelta
 import logging
 from pathlib import Path
-import re
 from typing import Any
 
 import voluptuous as vol
@@ -17,6 +16,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import area_registry as ar
 
 from .const import CONF_PREP_CALENDAR_ENTITY_ID, DOMAIN, PANEL_URL_PATH, VOID_LOCATION_ID
+from .planning import date_in_range, format_quantities, freshness_status, recipe_suggestions_data, word_tokens
 from .store import MiseEnPlaceAssistantInventory
 
 _LOGGER = logging.getLogger(__name__)
@@ -269,11 +269,13 @@ def _overview_data(manager: MiseEnPlaceAssistantInventory, meal_count: int = 1) 
         logbook=manager.logbook,
     )
     complete_meal_plan = manager.complete_meal_plan(meal_count)
-    recipe_suggestions = _recipe_suggestions_data(
+    recipe_suggestions = recipe_suggestions_data(
         recipes=recipes,
         item_totals=item_totals,
         containers=containers,
-        logbook=manager.logbook,
+        log_for=lambda recipe: _log_summary(
+            _related_log(manager.logbook, recipe.get("label") or "", "recipe", "stock")
+        ),
     )
     meal_prep = _meal_prep_data(
         hass=manager.hass,
@@ -710,7 +712,6 @@ def _readiness_data(
 ) -> dict[str, Any]:
     """Return dashboard-ready recommendation groups from existing provider data."""
     recent_log = _recent_provider_log(logbook)
-    today = date.today().isoformat()
     ready_components = [
         _readiness_item(
             entry["component"],
@@ -763,10 +764,7 @@ def _readiness_data(
             log=_related_log(logbook, container["name"], container.get("item_label") or "", "date"),
         )
         for container in containers
-        if (
-            container.get("best_before_date")
-            and str(container.get("best_before_date")) < today
-        )
+        if freshness_status(container.get("best_before_date"))["status"] == "stale"
     ]
     location_at_risk = [
         _readiness_item(
@@ -1086,166 +1084,7 @@ def _suggested_action_sort_key(action: dict[str, Any]) -> tuple[int, str]:
 
 def _date_in_range(value: Any, start: date, end: date) -> bool:
     """Return whether an ISO date string falls in an inclusive range."""
-    if not value:
-        return False
-    try:
-        parsed = date.fromisoformat(str(value))
-    except ValueError:
-        return False
-    return start <= parsed <= end
-
-
-def _recipe_suggestions_data(
-    *,
-    recipes: list[dict[str, Any]],
-    item_totals: list[dict[str, Any]],
-    containers: list[dict[str, Any]],
-    logbook: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Score Mealie recipes against Grocy/Mise stock, prioritizing best-before dates."""
-    stocked = [item for item in item_totals if _as_float(item.get("quantity")) > 0 or item.get("quantities")]
-    suggestions: list[dict[str, Any]] = []
-    for recipe in recipes:
-        ingredients = [
-            ingredient
-            for ingredient in recipe.get("ingredients") or []
-            if isinstance(ingredient, dict) and (ingredient.get("label") or ingredient.get("original"))
-        ]
-        if not ingredients:
-            continue
-        matched: list[dict[str, Any]] = []
-        missing: list[dict[str, Any]] = []
-        best_before: list[dict[str, Any]] = []
-        score = 0
-        for ingredient in ingredients:
-            stock = _ingredient_stock_match(ingredient, stocked)
-            if not stock:
-                missing.append(_recipe_ingredient_summary(ingredient))
-                continue
-            urgency = _best_before_urgency(stock.get("best_before_date"))
-            matched.append(
-                {
-                    **_recipe_ingredient_summary(ingredient),
-                    "stock_label": stock.get("label") or "",
-                    "stock_quantity": _stock_quantity_label(stock),
-                    "best_before_date": stock.get("best_before_date") or "",
-                    "best_before_status": urgency["status"],
-                }
-            )
-            score += 10 + urgency["score"]
-            if urgency["status"] in {"due", "soon", "stale"}:
-                best_before.append(
-                    {
-                        "label": stock.get("label") or ingredient.get("label") or "Ingredient",
-                        "best_before_date": stock.get("best_before_date"),
-                        "status": urgency["status"],
-                        "days": urgency["days"],
-                    }
-                )
-        if not matched:
-            continue
-        coverage = len(matched) / len(ingredients)
-        score += round(coverage * 20)
-        if missing:
-            score -= len(missing) * 4
-        suggestions.append(
-            {
-                "id": recipe.get("id") or recipe.get("slug") or recipe.get("label"),
-                "label": recipe.get("label") or "Recipe",
-                "provider": recipe.get("provider") or "",
-                "score": score,
-                "coverage": round(coverage, 2),
-                "matched_count": len(matched),
-                "ingredient_count": len(ingredients),
-                "missing_count": len(missing),
-                "matched": matched[:6],
-                "missing": missing[:6],
-                "best_before": best_before[:4],
-                "reason": _recipe_suggestion_reason(matched, missing, best_before),
-                "log": _log_summary(_related_log(logbook, recipe.get("label") or "", "recipe", "stock")),
-            }
-        )
-    return sorted(suggestions, key=lambda row: (-row["score"], row["label"].casefold()))[:8]
-
-
-def _ingredient_stock_match(ingredient: dict[str, Any], stocked: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return the best stock row for one recipe ingredient."""
-    ids = {
-        str(value).casefold()
-        for value in (ingredient.get("grocy_product_id"), ingredient.get("food_id"))
-        if value
-    }
-    if ids:
-        for item in stocked:
-            item_id = str(item.get("item_id") or "").casefold()
-            if item_id in ids:
-                return item
-    ingredient_tokens = {
-        token for token in _word_tokens(f"{ingredient.get('label', '')} {ingredient.get('original', '')}") if len(token) > 2
-    }
-    if not ingredient_tokens:
-        return None
-    best_item: dict[str, Any] | None = None
-    best_overlap = 0
-    for item in stocked:
-        label_tokens = {token for token in _word_tokens(item.get("label") or "") if len(token) > 2}
-        overlap = len(ingredient_tokens & label_tokens)
-        if overlap > best_overlap:
-            best_overlap = overlap
-            best_item = item
-    return best_item if best_overlap else None
-
-
-def _recipe_ingredient_summary(ingredient: dict[str, Any]) -> dict[str, Any]:
-    """Return panel-safe ingredient text."""
-    quantity = ingredient.get("quantity")
-    amount = f"{quantity:g}" if isinstance(quantity, (int, float)) else str(quantity or "").strip()
-    unit = str(ingredient.get("unit") or "").strip()
-    return {
-        "label": ingredient.get("label") or ingredient.get("original") or "Ingredient",
-        "amount": " ".join(part for part in (amount, unit) if part),
-        "original": ingredient.get("original") or "",
-    }
-
-
-def _stock_quantity_label(stock: dict[str, Any]) -> str:
-    """Return a compact stock quantity label."""
-    if stock.get("quantity") is not None and stock.get("unit"):
-        return f"{stock.get('quantity')} {stock.get('unit')}".strip()
-    return _format_quantities(stock.get("quantities") or {})
-
-
-def _best_before_urgency(value: Any) -> dict[str, Any]:
-    """Return score and status for a Grocy/Mise best-before date."""
-    if not value:
-        return {"score": 0, "status": "", "days": None}
-    try:
-        days = (date.fromisoformat(str(value)) - date.today()).days
-    except ValueError:
-        return {"score": 0, "status": "", "days": None}
-    if days < 0:
-        return {"score": 6, "status": "stale", "days": days}
-    if days <= 1:
-        return {"score": 8, "status": "due", "days": days}
-    if days <= 3:
-        return {"score": 6, "status": "soon", "days": days}
-    if days <= 7:
-        return {"score": 3, "status": "upcoming", "days": days}
-    return {"score": 0, "status": "", "days": days}
-
-
-def _recipe_suggestion_reason(
-    matched: list[dict[str, Any]],
-    missing: list[dict[str, Any]],
-    best_before: list[dict[str, Any]],
-) -> str:
-    """Explain why a recipe was suggested."""
-    if best_before:
-        first = best_before[0]
-        return f"Uses {first.get('label') or 'stock'} before {first.get('best_before_date')} and matches {len(matched)} stocked ingredients."
-    if missing:
-        return f"Matches {len(matched)} stocked ingredients; {len(missing)} ingredients still need shopping or review."
-    return f"All {len(matched)} known ingredients are stocked."
+    return date_in_range(value, start, end)
 
 
 def _planning_comparison_data(
@@ -1378,12 +1217,12 @@ def _log_summary(entry: dict[str, Any] | None) -> dict[str, Any] | None:
 
 def _format_quantities(quantities: dict[str, Any]) -> str:
     """Format simple quantity maps for compact panel rows."""
-    return " + ".join(f"{amount} {unit}" for unit, amount in quantities.items()) or "Ready"
+    return format_quantities(quantities)
 
 
 def _word_tokens(value: Any) -> list[str]:
     """Normalize labels and log text into comparable tokens."""
-    return re.findall(r"[a-z0-9]+", str(value).casefold())
+    return word_tokens(value)
 
 
 def _as_float(value: Any) -> float:

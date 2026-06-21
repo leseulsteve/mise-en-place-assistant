@@ -37,6 +37,7 @@ from .const import (
     SERVICE_ADD_MISSING_PRODUCTS_TO_SHOPPING_LIST,
     SERVICE_ADD_TO_SHOPPING_LIST,
     SERVICE_CREATE_PREP_SESSION,
+    SERVICE_MARK_CONTAINER_EATEN,
     SERVICE_PLAN_COMPLETE_MEALS,
     SERVICE_UPDATE_PRODUCT_METADATA,
     SERVICE_CREATE_RECIPE_CONTAINER,
@@ -49,6 +50,7 @@ from .const import (
     SERVICE_RESTORE_CONTAINER,
     SERVICE_SCAN_CONTAINER,
     SERVICE_SIMULATE_CRUD,
+    SERVICE_TRANSFER_TV_DINNERS,
     SERVICE_UPDATE_CONTAINER,
     PROVIDER_MOCKED,
     LOCATION_TYPES,
@@ -101,6 +103,7 @@ ATTR_START_DATE_TIME = "start_date_time"
 ATTR_END_DATE_TIME = "end_date_time"
 ATTR_RECIPE_IDS = "recipe_ids"
 ATTR_RECIPE_QUANTITIES = "recipe_quantities"
+ATTR_MEALS = "meals"
 ATTR_AVAILABLE_IN_MEALIE = "available_in_mealie"
 ATTR_REQUEST_ID = "request_id"
 ATTR_SOURCE_PROVIDER = "source_provider"
@@ -220,6 +223,15 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async def handle_clear_container(call: ServiceCall) -> None:
         try:
             await _manager(hass).async_clear_container(call.data[ATTR_TAG_ID])
+        except (KeyError, ValueError) as err:
+            raise ServiceValidationError(
+                f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
+                if isinstance(err, KeyError) else str(err)
+            ) from err
+
+    async def handle_mark_container_eaten(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_mark_container_eaten(call.data[ATTR_TAG_ID])
         except (KeyError, ValueError) as err:
             raise ServiceValidationError(
                 f"Unknown Mise en Place Assistant container tag_id: {err.args[0]}"
@@ -460,6 +472,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         except ValueError as err:
             raise ServiceValidationError(str(err)) from err
 
+    async def handle_transfer_tv_dinners(call: ServiceCall) -> None:
+        try:
+            await _manager(hass).async_transfer_tv_dinners(call.data[ATTR_MEALS])
+        except (KeyError, ValueError) as err:
+            raise ServiceValidationError(str(err)) from err
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_CREATE_LOCATION,
@@ -513,6 +531,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         DOMAIN,
         SERVICE_CLEAR_CONTAINER,
         handle_clear_container,
+        schema=vol.Schema({vol.Required(ATTR_TAG_ID): cv.string}),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_MARK_CONTAINER_EATEN,
+        handle_mark_container_eaten,
         schema=vol.Schema({vol.Required(ATTR_TAG_ID): cv.string}),
     )
     hass.services.async_register(
@@ -695,6 +719,12 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
                 vol.Optional(ATTR_DESCRIPTION, default=""): cv.string,
             }
         ),
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_TRANSFER_TV_DINNERS,
+        handle_transfer_tv_dinners,
+        schema=vol.Schema({vol.Required(ATTR_MEALS): [dict]}),
     )
     _LOGGER.debug("Registered Mise en Place Assistant services")
     return True

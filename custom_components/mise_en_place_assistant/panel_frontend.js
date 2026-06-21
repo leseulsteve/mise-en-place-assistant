@@ -22,6 +22,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this._mealPlanCount ??= 1;
     this._tvDinnerCount ??= 1;
     this._tvDinnerPlan ??= null;
+    this._tvDinnerMealContainers ??= {};
     this._mealPrepSummaryDraft ??= "";
     this._selectedPrepSessionId ??= "";
     this._prepRecipeSelection ??= {};
@@ -255,6 +256,36 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         }
         .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
         .prep-quantity { width: 72px; }
+        .meal-selector {
+          min-width: 0;
+        }
+        .meal-stepper {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .meal-stepper output {
+          min-width: 38px;
+          height: 34px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid var(--divider-color);
+          border-radius: 8px;
+          background: var(--primary-background-color);
+          color: var(--primary-text-color);
+          font-weight: 750;
+        }
+        .meal-transfer {
+          display: flex;
+          gap: 8px;
+          align-items: end;
+          flex-wrap: wrap;
+          margin-top: 10px;
+        }
+        .meal-transfer label {
+          min-width: 170px;
+        }
         .toolbar {
           display: flex;
           align-items: center;
@@ -870,12 +901,16 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       event.currentTarget.value = String(count);
       this._load();
     });
-    this.shadowRoot.getElementById("tv-dinner-count")?.addEventListener("change", (event) => {
-      const count = Math.max(1, Math.floor(Number(event.currentTarget.value) || 1));
-      this._tvDinnerCount = count;
-      event.currentTarget.value = String(count);
-    });
+    this.shadowRoot.querySelectorAll("[data-tv-dinner-count-step]").forEach((button) => button.addEventListener("click", () => {
+      const current = Math.max(1, Math.floor(Number(this._tvDinnerCount) || 1));
+      this._tvDinnerCount = Math.max(1, current + Number(button.dataset.tvDinnerCountStep || 0));
+      this._render();
+    }));
+    this.shadowRoot.querySelectorAll("[data-tv-dinner-meal-container]").forEach((select) => select.addEventListener("change", () => {
+      this._tvDinnerMealContainers[select.dataset.tvDinnerMealContainer] = select.value;
+    }));
     this.shadowRoot.getElementById("tv-dinner-dice")?.addEventListener("click", () => this._rollTvDinner());
+    this.shadowRoot.getElementById("tv-dinner-transfer")?.addEventListener("click", () => this._transferTvDinners());
     this.shadowRoot.getElementById("add-location")?.addEventListener("click", () => { if (this._isBusy()) return; this._editingLocation = ""; this._showLocation = !this._showLocation; this._render(); });
     this.shadowRoot.getElementById("create-form")?.addEventListener("submit", (event) => this._createContainer(event));
     this.shadowRoot.getElementById("edit-container-form")?.addEventListener("submit", (event) => this._saveContainerEdit(event));
@@ -925,6 +960,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-open-move-container]").forEach((button) => button.addEventListener("click", () => this._openContainerMove(button.dataset.openMoveContainer, button.dataset.currentLocation)));
     this.shadowRoot.querySelectorAll("[data-move-tag]").forEach((select) => select.addEventListener("change", () => this._moveContainer(select.dataset.moveTag, select.value)));
     this.shadowRoot.querySelectorAll("[data-clear-container]").forEach((button) => button.addEventListener("click", () => this._runContainerService("clear_container", button.dataset.clearContainer, `Clear ${button.dataset.containerName}?`, "Could not clear container.")));
+    this.shadowRoot.querySelectorAll("[data-mark-container-eaten]").forEach((button) => button.addEventListener("click", () => this._runContainerService("mark_container_eaten", button.dataset.markContainerEaten, `Mark ${button.dataset.containerName} as eaten?`, "Could not mark meal eaten.")));
     this.shadowRoot.querySelectorAll("[data-delete-container]").forEach((button) => button.addEventListener("click", () => this._runContainerService("delete_container", button.dataset.deleteContainer, `Delete ${button.dataset.containerName}?`, "Could not delete container.")));
     this.shadowRoot.querySelectorAll("[data-product-metadata]").forEach((form) => form.addEventListener("submit", (event) => this._saveProductMetadata(event)));
     this.shadowRoot.querySelectorAll("[data-queue-product]").forEach((button) => button.addEventListener("click", () => this._queueProduct(button.dataset.queueProduct, button.dataset.productLabel)));
@@ -991,6 +1027,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   _inventoryView(items, containers, locations) {
     const groups = this._inventoryProductGroups(items);
     const attention = this._inventoryReviewRows(this._data?.product_attention || []);
+    const readyToEatSoon = this._inventoryReadyToEatSoon(containers, locations);
     return `
       <section class="stack">
         <section class="grid">
@@ -1012,6 +1049,10 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
             </section>
           </div>
           <div class="stack">
+            <section class="card">
+              <h2>Ready to eat soon</h2>
+              ${readyToEatSoon.length ? readyToEatSoon.map((meal) => this._inventoryReadyToEatRow(meal, locations)).join("") : this._empty("No ready-to-eat meals need attention.")}
+            </section>
             <section class="card">
               <h2>Needs review</h2>
               ${attention.length ? attention.map((item) => this._inventoryReviewRow(item)).join("") : this._empty("No inventory review items.")}
@@ -1107,6 +1148,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
 
   _tvDinnerView(data) {
     const plan = this._tvDinnerPlan || data?.tv_dinner_plan || null;
+    const mealCount = Math.max(1, Math.floor(Number(this._tvDinnerCount) || 1));
+    this._tvDinnerCount = mealCount;
     return `
       <section class="sections single">
         <div class="stack">
@@ -1114,20 +1157,28 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
             <div class="toolbar">
               <h2>Tv dinner</h2>
               <div class="actions">
-                <label>Meals<input id="tv-dinner-count" type="number" min="1" step="1" value="${this._safe(this._tvDinnerCount || 1)}" /></label>
+                <label class="meal-selector">Meals
+                  <span class="meal-stepper" aria-label="Number of meals to generate">
+                    <button type="button" class="icon-button" data-tv-dinner-count-step="-1" title="Fewer meals" aria-label="Fewer meals"><ha-icon icon="mdi:minus"></ha-icon></button>
+                    <output id="tv-dinner-count" aria-live="polite">${this._safe(mealCount)}</output>
+                    <button type="button" class="icon-button" data-tv-dinner-count-step="1" title="More meals" aria-label="More meals"><ha-icon icon="mdi:plus"></ha-icon></button>
+                  </span>
+                </label>
                 <button type="button" id="tv-dinner-dice" title="Roll TV dinner" aria-label="Roll TV dinner"><ha-icon icon="mdi:dice-multiple"></ha-icon></button>
               </div>
             </div>
-            ${plan ? this._tvDinnerPlanView(plan) : this._empty("Roll for complete meals.")}
+            ${plan ? this._tvDinnerPlanView(plan, data) : this._empty("Roll for complete meals.")}
           </section>
         </div>
       </section>
     `;
   }
 
-  _tvDinnerPlanView(plan = {}) {
+  _tvDinnerPlanView(plan = {}, data = {}) {
     const shortages = Object.values(plan.shortages || {});
     const meals = plan.meals || [];
+    const availableContainers = this._availableTvDinnerContainers(data);
+    const transferable = this._tvDinnerTransferMeals(plan, availableContainers);
     const skipped = (plan.skipped || []).slice(0, 6).map((item) => `<p class="muted subline">${this._safe(item.label)}: ${this._safe(item.reason)}</p>`).join("");
     return `
       <div class="summary-row ${plan.complete ? "ok" : "warn"}">
@@ -1135,12 +1186,15 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         <p class="muted subline">Best-before and variety weighted random assignment</p>
       </div>
       ${shortages.length ? `<div class="row compact-row"><div><p class="name">Shortages</p>${shortages.map((item) => `<p class="muted subline">${this._safe(item.label || "")}: missing ${this._safe(item.missing)}</p>`).join("")}</div></div>` : ""}
-      <div class="recipe-grid">${meals.map((meal) => this._tvDinnerMeal(meal)).join("")}</div>
+      <div class="recipe-grid">${meals.map((meal, index) => this._tvDinnerMeal(meal, availableContainers, index)).join("")}</div>
+      <div class="meal-transfer">
+        <button type="button" id="tv-dinner-transfer"${transferable.length ? "" : " disabled"}>Transfer complete meals</button>
+      </div>
       ${skipped ? `<div class="row compact-row"><div><p class="name">Skipped</p>${skipped}</div></div>` : ""}
     `;
   }
 
-  _tvDinnerMeal(meal = {}) {
+  _tvDinnerMeal(meal = {}, availableContainers = [], index = 0) {
     const components = meal.components || {};
     const rows = [
       ["veggie", "Veggie"],
@@ -1152,10 +1206,18 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         ? `<p class="muted subline"><strong>${label}</strong>: ${this._safe(component.label)}${this._componentDiversity(component)}${this._componentPlace(component)}</p>`
         : `<p class="muted subline"><strong>${label}</strong>: missing</p>`;
     }).join("");
+    const mealId = String(meal.meal || "");
+    const selectedTagId = this._tvDinnerMealContainers[mealId] || availableContainers[index]?.tag_id || "";
+    const options = availableContainers.map((container) => `<option value="${this._safe(container.tag_id)}"${container.tag_id === selectedTagId ? " selected" : ""}>${this._safe(container.name || container.tag_id)}</option>`).join("");
     return `<article class="row compact-row">
       <div>
         <p class="name">Meal ${this._safe(meal.meal || "")}</p>
         ${rows}
+        <div class="meal-transfer">
+          <label>Container<select data-tv-dinner-meal-container="${this._safe(mealId)}" ${meal.complete === false || !availableContainers.length ? "disabled" : ""}>
+            ${options || '<option value="">No TV dinner containers</option>'}
+          </select></label>
+        </div>
       </div>
     </article>`;
   }
@@ -2245,7 +2307,11 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     }
     await this._withBusy(service.replace("_", " "), async () => {
       await this._hass.callService("mise_en_place_assistant", service, { tag_id: tagId });
-      this._notice = service === "delete_container" ? "Container deleted." : "Container cleared.";
+      this._notice = service === "delete_container"
+        ? "Container deleted."
+        : service === "mark_container_eaten"
+          ? "Ready meal marked eaten."
+          : "Container cleared.";
       await this._loadIfNoEventSocket();
     }, (err) => {
       this._error = err?.message || errorMessage;
@@ -2411,12 +2477,74 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         type: "mise_en_place_assistant/tv_dinner_plan",
         meal_count: this._tvDinnerCount || 1,
       });
+      this._tvDinnerMealContainers = {};
       this._notice = "TV dinner rolled.";
       this._render();
     }, (err) => {
       this._error = err?.message || "Could not roll TV dinner.";
       this._render();
     });
+  }
+
+  async _transferTvDinners() {
+    if (this._isBusy() || !this._hass) return;
+    const meals = this._tvDinnerTransferMeals(this._tvDinnerPlan, this._availableTvDinnerContainers(this._data));
+    if (!meals.length) {
+      this._error = "No complete TV dinner meals are ready to transfer.";
+      this._render();
+      return;
+    }
+    await this._withBusy("transferring tv dinners", async () => {
+      await this._hass.callService("mise_en_place_assistant", "transfer_tv_dinners", { meals });
+      this._tvDinnerPlan = null;
+      this._notice = `${meals.length} TV dinner${meals.length === 1 ? "" : "s"} transferred to fridge containers.`;
+      await this._loadIfNoEventSocket();
+    }, (err) => {
+      this._error = err?.message || "Could not transfer TV dinners.";
+      this._render();
+    });
+  }
+
+  _tvDinnerTransferMeals(plan = {}, availableContainers = []) {
+    return (plan?.meals || []).filter((meal) => {
+      const components = meal.components || {};
+      return meal.complete !== false && ["veggie", "starch", "protein"].every((role) => components[role]?.tag_id);
+    }).slice(0, availableContainers.length).map((meal, index) => {
+      const mealId = String(meal.meal || "");
+      const components = meal.components || {};
+      return {
+        meal: meal.meal,
+        complete: true,
+        container_type: "tv_dinner",
+        container_tag_id: this._tvDinnerMealContainers[mealId] || availableContainers[index]?.tag_id || "",
+        components: {
+          veggie: this._tvDinnerTransferComponent(components.veggie),
+          starch: this._tvDinnerTransferComponent(components.starch),
+          protein: this._tvDinnerTransferComponent(components.protein),
+        },
+      };
+    });
+  }
+
+  _tvDinnerTransferComponent(component = {}) {
+    return {
+      tag_id: component.tag_id,
+      label: component.label,
+      quantity: 1,
+    };
+  }
+
+  _availableTvDinnerContainers(data = {}) {
+    return (data?.containers || []).filter((container) => {
+      const quantity = Number(container.canonical_quantity ?? container.quantity ?? 0);
+      return Number.isFinite(quantity) && quantity === 0 && this._normalizedContainerType(container) === "tv dinner";
+    });
+  }
+
+  _normalizedContainerType(container = {}) {
+    const explicit = String(container.container_type || container.storage_container_type || container.item_format || container.format || "").trim().toLowerCase().replaceAll("_", " ").replaceAll("-", " ");
+    const haystack = [explicit, container.name, container.item_label].map((value) => String(value || "")).join(" ").toLowerCase().replaceAll("_", " ").replaceAll("-", " ");
+    return haystack.includes("tv dinner") ? "tv dinner" : explicit;
   }
 
   async _saveProductMetadata(event) {
@@ -3189,6 +3317,119 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       klass: item.has_stock ? "warn" : "critical",
       action: item.item_id ? `<button type="button" class="secondary" data-queue-product="${this._safe(item.item_id)}" data-product-label="${this._safe(item.label)}">Queue missing prep</button>` : "",
     });
+  }
+
+  _inventoryReadyToEatSoon(containers = [], locations = []) {
+    const locationTypes = new Map(locations.map((location) => [location.id, location.location_type || "other"]));
+    return containers
+      .filter((container) => {
+        const locationType = locationTypes.get(container?.location_id) || "";
+        return this._isReadyToEatContainer(container, locationType) && this._inventoryDueSoonStatus(container, locationType).rank > 0;
+      })
+      .sort((left, right) => {
+        const leftStatus = this._inventoryDueSoonStatus(left, locationTypes.get(left.location_id) || "");
+        const rightStatus = this._inventoryDueSoonStatus(right, locationTypes.get(right.location_id) || "");
+        return rightStatus.rank - leftStatus.rank || leftStatus.sortDate.localeCompare(rightStatus.sortDate);
+      })
+      .slice(0, 6);
+  }
+
+  _inventoryReadyToEatRow(container, locations = []) {
+    const locationType = (locations.find((location) => location.id === container.location_id) || {}).location_type || "";
+    const status = this._inventoryDueSoonStatus(container, locationType);
+    const location = this._containerPlace(container) || "No location";
+    const quantity = `${container.quantity ?? 0} ${container.unit || ""}`.trim();
+    return this._summaryRow(container.item_label || container.name || "Ready meal", [
+      container.name || "",
+      location,
+      status.label,
+    ], {
+      quantity,
+      klass: status.klass,
+      pills: ["Ready to eat"],
+      action: `<button type="button" class="secondary" data-mark-container-eaten="${this._safe(container.tag_id)}" data-container-name="${this._safe(container.item_label || container.name || "meal")}">Mark eaten</button>`,
+    });
+  }
+
+  _isReadyToEatContainer(container = {}, locationType = "") {
+    const quantity = Number(container.canonical_quantity ?? container.quantity ?? 0);
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      return false;
+    }
+    if (container.content_kind === "meal" && locationType !== "freezer") {
+      return true;
+    }
+    return this._normalizedContainerType(container) === "tv dinner";
+  }
+
+  _inventoryDueSoonStatus(container = {}, locationType = "") {
+    const bestBefore = this._parseInventoryDate(container.best_before_date);
+    const storageStatus = this._inventoryReadyStorageStatus(container, locationType);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    if (!bestBefore) {
+      return storageStatus;
+    }
+    const days = Math.round((bestBefore.getTime() - today.getTime()) / 86400000);
+    let freshnessStatus = { rank: 0, label: "", klass: "", sortDate: String(container.best_before_date || "") };
+    if (days < 0) {
+      freshnessStatus = { rank: 4, label: `Best before ${container.best_before_date} · overdue`, klass: "critical", sortDate: String(container.best_before_date || "") };
+    } else if (days <= 1) {
+      freshnessStatus = { rank: 3, label: `Best before ${container.best_before_date} · due now`, klass: "critical", sortDate: String(container.best_before_date || "") };
+    } else if (days <= 3) {
+      freshnessStatus = { rank: 2, label: `Best before ${container.best_before_date} · ${days} days left`, klass: "warn", sortDate: String(container.best_before_date || "") };
+    } else if (days <= 7) {
+      freshnessStatus = { rank: 1, label: `Best before ${container.best_before_date} · this week`, klass: "warn", sortDate: String(container.best_before_date || "") };
+    }
+    return storageStatus.rank > freshnessStatus.rank ? storageStatus : freshnessStatus;
+  }
+
+  _inventoryReadyStorageStatus(container = {}, locationType = "") {
+    const storedSince = this._parseInventoryDateTime(container.updated_at || container.created_at);
+    if (!storedSince || locationType === "freezer") {
+      return { rank: 0, label: "", klass: "", sortDate: "" };
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    storedSince.setHours(0, 0, 0, 0);
+    const days = Math.max(0, Math.round((today.getTime() - storedSince.getTime()) / 86400000));
+    const limit = locationType === "fridge" ? 4 : 1;
+    const label = `Not in freezer since ${this._formatDate(storedSince)} · ${days} ${days === 1 ? "day" : "days"} ready`;
+    if (days >= limit) {
+      return { rank: 3, label, klass: "critical", sortDate: this._formatDate(storedSince) };
+    }
+    if (days >= Math.max(1, limit - 1)) {
+      return { rank: 1, label, klass: "warn", sortDate: this._formatDate(storedSince) };
+    }
+    return { rank: 0, label: "", klass: "", sortDate: this._formatDate(storedSince) };
+  }
+
+  _parseInventoryDate(value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(value || ""))) {
+      return null;
+    }
+    const [year, month, day] = String(value).split("-").map((part) => Number(part));
+    const parsed = new Date(year, month - 1, day);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  _parseInventoryDateTime(value) {
+    if (!value) {
+      return null;
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  _formatDate(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+
+  _containerPlace(container = {}) {
+    return [container.location, container.sublocation].filter(Boolean).join(" / ");
   }
 
   _inventorySourceSummary(items = []) {

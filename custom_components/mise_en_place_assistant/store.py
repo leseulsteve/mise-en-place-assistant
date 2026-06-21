@@ -60,6 +60,7 @@ from .grocy import GrocyCatalogClient, GrocyCatalogError
 from .kitchenowl import KitchenOwlError, KitchenOwlShoppingClient
 from .mealie import MealieCatalogClient, MealieCatalogError
 from .mocked import MOCKED_FOODS, MOCKED_RECIPES, MOCKED_STOCK, MOCKED_STORAGE_LOCATIONS
+from .planning import freshness_rank_key, meal_candidate_rank, storage_due_date
 from .units import normalize_quantity, quantity_in_display_unit, units_are_compatible
 
 _LOGGER = logging.getLogger(__name__)
@@ -372,8 +373,8 @@ class MiseEnPlaceAssistantInventory:
                 {
                     **annotation,
                     **location,
-                    "location_type": annotation.get("location_type", "other"),
-                    "sublocations": annotation.get("sublocations", []),
+                    "location_type": annotation.get("location_type") or location.get("location_type", "other"),
+                    "sublocations": annotation.get("sublocations") or location.get("sublocations", []),
                     "area_id": annotation.get("area_id"),
                     "sensors": annotation.get("sensors", {}),
                     "monitoring": annotation.get("monitoring", {}),
@@ -1343,14 +1344,18 @@ class MiseEnPlaceAssistantInventory:
                 },
             )
 
-    @staticmethod
-    def _grocy_stock_metadata(container: dict[str, Any]) -> dict[str, Any]:
+    def _grocy_stock_metadata(self, container: dict[str, Any]) -> dict[str, Any]:
         """Return optional Grocy stock fields that are meaningful on stock additions."""
-        return {
+        metadata = {
             key: container[key]
             for key in ("best_before_date", "purchased_date", "opened_date", "price")
             if container.get(key) not in (None, "")
         }
+        if "best_before_date" not in metadata:
+            due_date = self._storage_due_date_for_container(container)
+            if due_date:
+                metadata["best_before_date"] = due_date
+        return metadata
 
     async def async_create_container(
         self,
@@ -1455,6 +1460,7 @@ class MiseEnPlaceAssistantInventory:
                 candidate[key] = value
             elif key in old:
                 candidate[key] = old[key]
+        self._apply_storage_due_date(candidate, before=old, best_before_supplied=best_before_date not in (None, ""))
         candidate.pop("deleted_at", None)
         await self._async_apply_grocy_stock_replacement(old, candidate)
         self.containers[tag_id] = candidate
@@ -1590,6 +1596,23 @@ class MiseEnPlaceAssistantInventory:
                 best_before_date=best_before_date,
             )
             created += 1
+        for index in range(1, 13):
+            tag_id = f"demo:tv-dinner-{index:02d}"
+            await self._async_create_container(
+                tag_id=tag_id,
+                name=f"TV dinner container {index}",
+                quantity=0,
+                location="Fridge",
+                sublocation="Top shelf",
+                unit="portions",
+                item_label="TV dinner container",
+                item_format="tv dinner",
+                source_provider="local",
+                content_kind="ingredient",
+            )
+            self.containers[tag_id]["container_type"] = "tv dinner"
+            self.containers[tag_id]["content_kind"] = "empty"
+            created += 1
         return created
 
     def _ensure_mock_demo_sublocations(self) -> bool:
@@ -1620,6 +1643,7 @@ class MiseEnPlaceAssistantInventory:
             "demo:mealie-starch-oats": "Dry goods",
             "demo:mealie-starch-bread": "Dry goods",
             "demo:lentil-loaf": "Top shelf",
+            **{f"demo:tv-dinner-{index:02d}": "Top shelf" for index in range(1, 13)},
         }
         changed = False
         for tag_id, sublocation in demo_sublocations.items():
@@ -1764,6 +1788,7 @@ class MiseEnPlaceAssistantInventory:
         ):
             if value not in (None, ""):
                 candidate[key] = value
+        self._apply_storage_due_date(candidate, before=before, best_before_supplied=best_before_date not in (None, ""))
         candidate["updated_at"] = _utc_now()
         await self._async_apply_grocy_stock_replacement(before, candidate)
         self.containers[tag_id] = candidate
@@ -1789,6 +1814,62 @@ class MiseEnPlaceAssistantInventory:
         """Empty a known container without deleting its identity or product attribution."""
         self._ensure_write_mode(allow_dev_inventory=True)
         await self._async_update_container(tag_id=tag_id, quantity=0)
+
+    async def async_mark_container_eaten(self, tag_id: str) -> None:
+        """Consume a ready-to-eat meal and return the physical container to empty tracking."""
+        self._ensure_write_mode(allow_dev_inventory=True)
+        tag_id = self._normalize_tag_id(tag_id)
+        if tag_id not in self.containers:
+            raise KeyError(tag_id)
+        container = self.containers[tag_id]
+        if container.get("state") == "deleted":
+            raise ValueError("Deleted containers cannot be marked eaten")
+        if container.get("content_kind") != "meal":
+            raise ValueError("Only ready meals can be marked eaten")
+        quantity = float(container.get("canonical_quantity", container.get("quantity", 0)) or 0)
+        if quantity <= 0:
+            raise ValueError("Only non-empty ready meals can be marked eaten")
+        before = dict(container)
+        display_unit = container.get("display_unit", container.get("unit", DEFAULT_UNIT))
+        container_type = self._normalized_container_type(container)
+        empty_label = "TV dinner container" if container_type == "tv dinner" else "Empty container"
+        shell_name = (
+            container.get("container_shell_name")
+            or (empty_label if container_type == "tv dinner" else container.get("name"))
+            or self.default_container_name(tag_id)
+        )
+        empty_format = "tv dinner" if container_type == "tv dinner" else None
+        now = _utc_now()
+        candidate = {
+            **container,
+            **normalize_quantity(0, display_unit),
+            "name": shell_name,
+            "content_kind": "empty",
+            "item_id": None,
+            "item_label": empty_label,
+            "item_format": empty_format,
+            "product_id": None,
+            "source_provider": "local",
+            "updated_at": now,
+        }
+        for key in (
+            "assembled_components",
+            "best_before_date",
+            "purchased_date",
+            "opened_date",
+            "price",
+            "pre_storage_best_before_date",
+            "pre_freezer_best_before_date",
+        ):
+            candidate.pop(key, None)
+        await self._async_apply_grocy_stock_replacement(before, candidate)
+        self.containers[tag_id] = candidate
+        self._add_log_entry(
+            "Ready meal eaten",
+            f"{before.get('item_label') or before.get('name') or 'Ready meal'} was eaten; {candidate.get('name') or tag_id} is now empty.",
+            {"tag_id": tag_id, "quantity": quantity, "unit": before.get("canonical_unit") or before.get("unit"), "product": self.product_snapshot(before)},
+        )
+        await self.async_save()
 
     async def async_delete_container(self, tag_id: str) -> None:
         """Mark a damaged, lost, or discarded physical container as deleted."""
@@ -2262,6 +2343,8 @@ class MiseEnPlaceAssistantInventory:
                 if stock
                 else None
             )
+            if not best_before_date:
+                best_before_date = self._automatic_product_due_date(product, (stock or {}).get("location_id"))
             total.update(
                 {
                     "unit": product.get("unit") or DEFAULT_UNIT,
@@ -2292,7 +2375,7 @@ class MiseEnPlaceAssistantInventory:
             location_totals[unit] = location_totals.get(unit, 0) + amount
             if container.get("best_before_date"):
                 best_before = total.get("best_before_date")
-                if not best_before or str(container["best_before_date"]) < str(best_before):
+                if not best_before or freshness_rank_key(container["best_before_date"]) < freshness_rank_key(best_before):
                     total["best_before_date"] = container["best_before_date"]
         for total in totals.values():
             if len(total["quantities"]) == 1:
@@ -2440,6 +2523,168 @@ class MiseEnPlaceAssistantInventory:
             ],
         }
 
+    async def async_transfer_tv_dinners(self, meals: list[dict[str, Any]]) -> dict[str, Any]:
+        """Consume complete-meal components and create assembled TV dinner containers."""
+        self._ensure_write_mode(allow_dev_inventory=True)
+        if not isinstance(meals, list) or not meals:
+            raise ValueError("At least one TV dinner meal is required")
+        fridge = self._tv_dinner_fridge_location()
+        requirements: dict[str, float] = {}
+        normalized_meals: list[dict[str, Any]] = []
+        for index, meal in enumerate(meals, start=1):
+            if not isinstance(meal, dict) or not meal.get("complete", True):
+                raise ValueError("Only complete TV dinner meals can be transferred")
+            container_type = str(meal.get("container_type") or "tv_dinner").strip().casefold().replace("_", " ")
+            if container_type != "tv dinner":
+                raise ValueError("TV dinner meals must use the tv dinner container type")
+            components = meal.get("components")
+            if not isinstance(components, dict):
+                raise ValueError("TV dinner meal components are required")
+            normalized_components: dict[str, dict[str, Any]] = {}
+            for role in ("veggie", "starch", "protein"):
+                component = components.get(role)
+                if not isinstance(component, dict):
+                    raise ValueError(f"TV dinner meal {index} is missing {role}")
+                tag_id = self._normalize_tag_id(component.get("tag_id", ""))
+                source = self.containers.get(tag_id)
+                if not source or source.get("state") == "deleted":
+                    raise KeyError(tag_id)
+                classification = self._container_meal_classification(source)
+                if classification.get("meal_component_role") != role:
+                    raise ValueError(f"{self.item_label_for_container(source)} is not a {role} component")
+                unit = source.get("unit") or source.get("canonical_unit") or DEFAULT_UNIT
+                if not self._is_portion_unit(unit):
+                    raise ValueError(f"{self.item_label_for_container(source)} must use a portion-compatible unit")
+                requirements[tag_id] = requirements.get(tag_id, 0) + 1
+                normalized_components[role] = {
+                    "tag_id": tag_id,
+                    "label": self.item_label_for_container(source),
+                    "quantity": 1,
+                    "unit": unit,
+                }
+            normalized_meals.append(
+                {
+                    "meal": meal.get("meal") or index,
+                    "container_type": "tv dinner",
+                    "container_tag_id": self._normalize_optional(meal.get("container_tag_id")),
+                    "components": normalized_components,
+                }
+            )
+        for tag_id, needed in requirements.items():
+            source = self.containers[tag_id]
+            available = float(source.get("canonical_quantity", source.get("quantity", 0)))
+            if available < needed:
+                raise ValueError(f"{self.item_label_for_container(source)} has {available:g} portions, needs {needed:g}")
+
+        targets = self._selected_tv_dinner_containers(normalized_meals)
+        if len(targets) < len(normalized_meals):
+            raise ValueError(f"{len(normalized_meals)} TV dinner containers needed, {len(targets)} available")
+
+        created: list[dict[str, Any]] = []
+        for tag_id, needed in requirements.items():
+            await self._async_update_container(
+                tag_id=tag_id,
+                delta=-needed,
+                unit=self.containers[tag_id].get("unit") or self.containers[tag_id].get("canonical_unit") or DEFAULT_UNIT,
+            )
+        for meal, target in zip(normalized_meals, targets, strict=True):
+            target_tag_id = target["tag_id"]
+            shell_name = target.get("container_shell_name") or target.get("name") or self.default_container_name(target_tag_id)
+            await self._async_create_container(
+                tag_id=target_tag_id,
+                name=f"TV dinner {meal['meal']}",
+                quantity=1,
+                location_id=fridge["id"],
+                unit="portions",
+                item_id="tv_dinner",
+                item_label="TV dinner",
+                item_format="assembled_tv_dinner",
+                source_provider="local",
+                content_kind="meal",
+                classification={"component": "tv_dinner", "meal_role": "prepared_component"},
+            )
+            self.containers[target_tag_id]["container_type"] = "tv dinner"
+            self.containers[target_tag_id]["container_shell_name"] = shell_name
+            self.containers[target_tag_id]["assembled_components"] = meal["components"]
+            created.append(
+                {
+                    "tag_id": target_tag_id,
+                    "name": self.containers[target_tag_id]["name"],
+                    "location_id": fridge["id"],
+                    "location": fridge.get("name"),
+                    "container_type": "tv dinner",
+                    "components": meal["components"],
+                }
+            )
+        self._add_log_entry(
+            "TV dinners transferred",
+            f"{len(created)} complete TV dinner{' was' if len(created) == 1 else 's were'} assembled in the fridge.",
+            {"created": created, "consumed": requirements},
+        )
+        await self.async_save()
+        return {"created": created, "consumed": requirements}
+
+    def _selected_tv_dinner_containers(self, meals: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return explicit or automatically selected empty TV dinner containers."""
+        available = {container["tag_id"]: container for container in self._available_tv_dinner_containers()}
+        selected: list[dict[str, Any]] = []
+        used: set[str] = set()
+        for meal in meals:
+            tag_id = meal.get("container_tag_id")
+            if not tag_id:
+                continue
+            if tag_id in used:
+                raise ValueError("Each TV dinner meal needs a different container")
+            if tag_id not in available:
+                raise ValueError("Selected TV dinner container is unavailable")
+            selected.append(available[tag_id])
+            used.add(tag_id)
+        if len(selected) == len(meals):
+            return selected
+        for tag_id, container in available.items():
+            if tag_id in used:
+                continue
+            selected.append(container)
+            if len(selected) == len(meals):
+                return selected
+        return selected
+
+    def _available_tv_dinner_containers(self) -> list[dict[str, Any]]:
+        """Return empty reusable TV dinner containers available to fill."""
+        containers = [
+            container
+            for container in self.active_containers()
+            if self._container_amount(container) == 0
+            and self._normalized_container_type(container) == "tv dinner"
+        ]
+        return sorted(containers, key=lambda container: (str(container.get("location") or ""), str(container.get("name") or ""), str(container.get("tag_id") or "")))
+
+    @staticmethod
+    def _normalized_container_type(container: dict[str, Any]) -> str:
+        """Return a normalized reusable container type."""
+        explicit = str(
+            container.get("container_type")
+            or container.get("storage_container_type")
+            or container.get("item_format")
+            or container.get("format")
+            or ""
+        ).strip().casefold().replace("_", " ").replace("-", " ")
+        haystack = " ".join(
+            str(value or "")
+            for value in (explicit, container.get("name"), container.get("item_label"))
+        ).casefold().replace("_", " ").replace("-", " ")
+        return "tv dinner" if "tv dinner" in haystack else explicit
+
+    def _tv_dinner_fridge_location(self) -> dict[str, Any]:
+        """Return the destination fridge for assembled TV dinner containers."""
+        locations = [location for location in self.storage_locations() if location.get("active", True)]
+        fridge = next((location for location in locations if location.get("location_type") == "fridge"), None)
+        if not fridge:
+            fridge = next((location for location in locations if str(location.get("name", "")).casefold() == "fridge"), None)
+        if not fridge:
+            raise ValueError("No fridge location is available for TV dinners")
+        return fridge
+
     def _complete_meal_candidates(self) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
         """Return eligible complete-meal component containers and skipped rows."""
         groups: dict[str, list[dict[str, Any]]] = {"veggie": [], "starch": [], "protein": []}
@@ -2512,6 +2757,84 @@ class MiseEnPlaceAssistantInventory:
             "meal_component_detail": detail,
         }
 
+    def _apply_storage_due_date(
+        self,
+        candidate: dict[str, Any],
+        *,
+        before: dict[str, Any] | None = None,
+        best_before_supplied: bool = False,
+    ) -> None:
+        """Adjust best-before date when an item enters typed storage."""
+        if best_before_supplied:
+            return
+        destination = self.location_for_id(candidate.get("location_id")) or {}
+        destination_type = destination.get("location_type")
+        if destination_type in (None, "", "other", "system"):
+            return
+        source = self.location_for_id((before or {}).get("location_id")) or {}
+        if source.get("location_type") == destination_type:
+            return
+        classification = self._container_meal_classification(candidate)
+        product = self.product_for_container(candidate) or {}
+        metadata = self._product_metadata_for_container(candidate)
+        due_date = storage_due_date(
+            location_type=destination_type,
+            content_kind=candidate.get("content_kind"),
+            storage_behavior=metadata.get("storage_behavior") or (product.get("classification") or {}).get("storage_behavior"),
+            meal_role=metadata.get("meal_role") or (product.get("classification") or {}).get("meal_role"),
+            meal_component_role=classification.get("meal_component_role"),
+            meal_component_family=classification.get("meal_component_family"),
+        )
+        if not due_date:
+            return
+        candidate["best_before_date"] = due_date
+        if (before or {}).get("best_before_date") and not candidate.get("pre_storage_best_before_date"):
+            candidate["pre_storage_best_before_date"] = (before or {}).get("best_before_date")
+        if destination_type == "freezer" and (before or {}).get("best_before_date") and not candidate.get("pre_freezer_best_before_date"):
+            candidate["pre_freezer_best_before_date"] = (before or {}).get("best_before_date")
+
+    def _storage_due_date_for_container(self, container: dict[str, Any]) -> str | None:
+        """Return automatic due date for a container's current typed location."""
+        destination = self.location_for_id(container.get("location_id")) or {}
+        location_type = destination.get("location_type")
+        if location_type in (None, "", "other", "system"):
+            return None
+        classification = self._container_meal_classification(container)
+        product = self.product_for_container(container) or {}
+        metadata = self._product_metadata_for_container(container)
+        return storage_due_date(
+            location_type=location_type,
+            content_kind=container.get("content_kind"),
+            storage_behavior=metadata.get("storage_behavior") or (product.get("classification") or {}).get("storage_behavior"),
+            meal_role=metadata.get("meal_role") or (product.get("classification") or {}).get("meal_role"),
+            meal_component_role=classification.get("meal_component_role"),
+            meal_component_family=classification.get("meal_component_family"),
+        )
+
+    def _automatic_product_due_date(self, product: dict[str, Any], location_id: Any = None) -> str | None:
+        """Return automatic due date for Grocy stock rows missing a user date."""
+        source_id = (product.get("source") or {}).get("id")
+        metadata = self.product_metadata.get(str(source_id), {}) if source_id else {}
+        location = self.location_for_id(str(location_id)) if location_id else None
+        location_type = (location or {}).get("location_type") or metadata.get("storage_behavior")
+        if location_type in (None, "", "unknown", "other", "system"):
+            return None
+        classification = product.get("classification") or {}
+        return storage_due_date(
+            location_type=location_type,
+            content_kind="ingredient",
+            storage_behavior=metadata.get("storage_behavior") or classification.get("storage_behavior"),
+            meal_role=metadata.get("meal_role") or classification.get("meal_role"),
+            meal_component_role=metadata.get("meal_component_role") or classification.get("meal_component_role") or classification.get("component"),
+            meal_component_family=metadata.get("meal_component_family") or classification.get("meal_component_family") or classification.get("primary_protein"),
+        )
+
+    def _product_metadata_for_container(self, container: dict[str, Any]) -> dict[str, Any]:
+        """Return HA-owned product metadata for a container's provider item."""
+        product = self.product_for_container(container) or {}
+        source_id = (product.get("source") or {}).get("id") or container.get("item_id")
+        return self.product_metadata.get(str(source_id), {}) if source_id else {}
+
     @staticmethod
     def _container_amount(container: dict[str, Any]) -> float:
         try:
@@ -2544,13 +2867,7 @@ class MiseEnPlaceAssistantInventory:
     @staticmethod
     def _meal_candidate_rank(candidate: dict[str, Any]) -> tuple:
         """Rank meal candidates by use-soonest freshness signals."""
-        return (
-            candidate.get("best_before_date") or "9999-12-31",
-            0 if candidate.get("opened_date") else 1,
-            candidate.get("available", 0),
-            candidate.get("updated_at") or "",
-            candidate.get("label") or "",
-        )
+        return meal_candidate_rank(candidate)
 
     @classmethod
     def _ranked_meal_candidates(cls, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:

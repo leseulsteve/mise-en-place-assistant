@@ -110,6 +110,9 @@ class GrocyCatalogClient:
                 "id": f"grocy:{product_id}",
                 "quantity": int(amount) if amount.is_integer() else amount,
             }
+            location_id = row.get("location_id") or row.get("default_location_id")
+            if location_id:
+                record["location_id"] = f"grocy:{location_id}"
             for key in ("best_before_date", "next_best_before_date", "due_date", "next_due_date"):
                 if row.get(key):
                     record[key] = row[key]

@@ -49,9 +49,9 @@ MOCKED_STOCK = [
 ]
 
 MOCKED_STORAGE_LOCATIONS = [
-    {"id": "mocked:fridge", "name": "Fridge", "provider": "mocked", "active": True, "sublocations": ["Top shelf", "Bottom drawer", "Door bin"]},
-    {"id": "mocked:freezer", "name": "Freezer", "provider": "mocked", "active": True, "sublocations": ["Top shelf", "Door bin"]},
-    {"id": "mocked:pantry", "name": "Pantry", "provider": "mocked", "active": True, "sublocations": ["Dry goods", "Coffee shelf"]},
+    {"id": "mocked:fridge", "name": "Fridge", "provider": "mocked", "active": True, "location_type": "fridge", "sublocations": ["Top shelf", "Bottom drawer", "Door bin"]},
+    {"id": "mocked:freezer", "name": "Freezer", "provider": "mocked", "active": True, "location_type": "freezer", "sublocations": ["Top shelf", "Door bin"]},
+    {"id": "mocked:pantry", "name": "Pantry", "provider": "mocked", "active": True, "location_type": "pantry", "sublocations": ["Dry goods", "Coffee shelf"]},
 ]
 
 

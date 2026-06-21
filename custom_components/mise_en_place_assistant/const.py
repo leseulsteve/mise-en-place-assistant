@@ -53,6 +53,7 @@ EVENT_MISE_EN_PLACE_ASSISTANT_COMPLETE_MEAL_PLAN = "mise_en_place_assistant.comp
 SERVICE_CREATE_CONTAINER = "create_container"
 SERVICE_CREATE_RECIPE_CONTAINER = "create_recipe_container"
 SERVICE_CLEAR_CONTAINER = "clear_container"
+SERVICE_MARK_CONTAINER_EATEN = "mark_container_eaten"
 SERVICE_ARCHIVE_CONTAINER = "archive_container"
 SERVICE_DELETE_CONTAINER = "delete_container"
 SERVICE_RESTORE_CONTAINER = "restore_container"
@@ -71,6 +72,7 @@ SERVICE_ADD_MISSING_PRODUCTS_TO_SHOPPING_LIST = "add_missing_products_to_shoppin
 SERVICE_UPDATE_PRODUCT_METADATA = "update_product_metadata"
 SERVICE_PLAN_COMPLETE_MEALS = "plan_complete_meals"
 SERVICE_CREATE_PREP_SESSION = "create_prep_session"
+SERVICE_TRANSFER_TV_DINNERS = "transfer_tv_dinners"
 
 SIGNAL_MISE_EN_PLACE_ASSISTANT_ENTITY_ADDED = "mise_en_place_assistant_entity_added"
 

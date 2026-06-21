@@ -98,6 +98,14 @@ clear_container:
       selector:
         text:
 
+mark_container_eaten:
+  description: Consume a ready-to-eat meal, record inventory movement, and return the physical container to empty active tracking.
+  fields:
+    tag_id:
+      required: true
+      selector:
+        text:
+
 archive_container:
   description: Compatibility alias for retiring an empty container from active tracking.
   fields:
@@ -262,6 +270,14 @@ create_recipe_container:
     sublocation:
       selector:
         text:
+
+transfer_tv_dinners:
+  description: Assemble selected complete TV dinner meals, consume one portion from each source component, and create ready-meal containers in the fridge.
+  fields:
+    meals:
+      required: true
+      selector:
+        object:
 
 fill_container:
   fields:

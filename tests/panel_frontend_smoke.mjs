@@ -85,17 +85,17 @@ panel.hass = {
           meal: 1,
           complete: true,
           components: {
-            veggie: { label: "Roasted broccoli", family: "cruciferous", detail: "broccoli", location: "Fridge", sublocation: "Top shelf" },
-            starch: { label: "Cooked basmati rice", family: "rice", detail: "basmati_rice", location: "Fridge", sublocation: "Top shelf" },
-            protein: { label: "Chicken curry", family: "poultry", detail: "chicken", location: "Fridge", sublocation: "Top shelf" },
+            veggie: { tag_id: "demo:broccoli", label: "Roasted broccoli", family: "cruciferous", detail: "broccoli", location: "Fridge", sublocation: "Top shelf" },
+            starch: { tag_id: "demo:meal-rice", label: "Cooked basmati rice", family: "rice", detail: "basmati_rice", location: "Fridge", sublocation: "Top shelf" },
+            protein: { tag_id: "demo:curry", label: "Chicken curry", family: "poultry", detail: "chicken", location: "Fridge", sublocation: "Top shelf" },
           },
         }, {
           meal: 2,
           complete: true,
           components: {
-            veggie: { label: "Braised greens", family: "leafy_green", detail: "greens", location: "Fridge", sublocation: "Top shelf" },
-            starch: { label: "Sweet potatoes", family: "potato", detail: "sweet_potato", location: "Fridge", sublocation: "Top shelf" },
-            protein: { label: "Salmon portions", family: "fish", detail: "salmon", location: "Freezer", sublocation: "Top shelf" },
+            veggie: { tag_id: "demo:braised-greens", label: "Braised greens", family: "leafy_green", detail: "greens", location: "Fridge", sublocation: "Top shelf" },
+            starch: { tag_id: "demo:sweet-potatoes", label: "Sweet potatoes", family: "potato", detail: "sweet_potato", location: "Fridge", sublocation: "Top shelf" },
+            protein: { tag_id: "demo:salmon", label: "Salmon portions", family: "fish", detail: "salmon", location: "Freezer", sublocation: "Top shelf" },
           },
         }],
         shortages: {},
@@ -113,6 +113,7 @@ panel.hass = {
       unit: "cups",
       canonical_quantity: 2,
       canonical_unit: "cups",
+      best_before_date: "2026-06-22",
       location_id: "fridge",
       location: "Fridge",
       sublocation: "Top shelf",
@@ -128,6 +129,19 @@ panel.hass = {
         primary_protein: "",
       },
     }, {
+      tag_id: "demo:thawed-stew",
+      name: "Thawed stew tub",
+      item_label: "Beef stew",
+      quantity: 1,
+      unit: "portion",
+      canonical_quantity: 1,
+      canonical_unit: "portion",
+      updated_at: "2026-06-17T12:00:00Z",
+      location_id: "fridge",
+      location: "Fridge",
+      sublocation: "Top shelf",
+      content_kind: "meal",
+    }, {
       tag_id: "demo:peas",
       name: "Freezer bin",
       item_label: "Frozen peas",
@@ -139,6 +153,46 @@ panel.hass = {
       location: "Freezer",
       sublocation: "Door bin",
       content_kind: "ingredient",
+    }, {
+      tag_id: "demo:frozen-tv-dinner",
+      name: "Microwave TV dinner",
+      item_label: "Chicken TV dinner",
+      quantity: 1,
+      unit: "portion",
+      canonical_quantity: 1,
+      canonical_unit: "portion",
+      best_before_date: "2026-06-22",
+      location_id: "freezer",
+      location: "Freezer",
+      sublocation: "Door bin",
+      content_kind: "meal",
+      container_type: "tv dinner",
+    }, {
+      tag_id: "demo:tv-dinner-01",
+      name: "TV dinner container 1",
+      item_label: "TV dinner container",
+      quantity: 0,
+      unit: "portions",
+      canonical_quantity: 0,
+      canonical_unit: "portions",
+      location_id: "fridge",
+      location: "Fridge",
+      sublocation: "Top shelf",
+      content_kind: "empty",
+      container_type: "tv dinner",
+    }, {
+      tag_id: "demo:tv-dinner-02",
+      name: "TV dinner container 2",
+      item_label: "TV dinner container",
+      quantity: 0,
+      unit: "portions",
+      canonical_quantity: 0,
+      canonical_unit: "portions",
+      location_id: "fridge",
+      location: "Fridge",
+      sublocation: "Top shelf",
+      content_kind: "empty",
+      container_type: "tv dinner",
     }],
     items: [{
       product_id: "product_tomatoes",
@@ -457,6 +511,22 @@ assert.match(panel.shadowRoot.innerHTML, /Inventory sources/);
 assert.match(panel.shadowRoot.innerHTML, /Grocy stock/);
 assert.match(panel.shadowRoot.innerHTML, /Last stock write/);
 assert.match(panel.shadowRoot.innerHTML, /Fridge: 2 cans/);
+assert.match(panel.shadowRoot.innerHTML, /Ready to eat soon/);
+assert.match(panel.shadowRoot.innerHTML, /Ready to eat/);
+assert.match(panel.shadowRoot.innerHTML, /Best before 2026-06-22/);
+assert.match(panel.shadowRoot.innerHTML, /Beef stew/);
+assert.match(panel.shadowRoot.innerHTML, /Not in freezer since 2026-06-17/);
+assert.match(panel.shadowRoot.innerHTML, /Chicken TV dinner/);
+assert.match(panel.shadowRoot.innerHTML, /Microwave TV dinner/);
+assert.match(panel.shadowRoot.innerHTML, /data-mark-container-eaten="demo:frozen-tv-dinner"/);
+assert.match(panel.shadowRoot.innerHTML, /Mark eaten/);
+assert.match(panel.shadowRoot.innerHTML, /Fridge \/ Top shelf/);
+await panel._runContainerService("mark_container_eaten", "demo:frozen-tv-dinner", null, "Could not mark meal eaten.");
+assert.deepEqual(serviceCalls.at(-1), {
+  domain: "mise_en_place_assistant",
+  service: "mark_container_eaten",
+  data: { tag_id: "demo:frozen-tv-dinner" },
+});
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Active containers/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Empty containers/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /best before 2026-07-01/);
@@ -484,14 +554,48 @@ panel._tvDinnerCount = 2;
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Tv dinner/);
 assert.match(panel.shadowRoot.innerHTML, /tv-dinner-dice/);
+assert.match(panel.shadowRoot.innerHTML, /data-tv-dinner-count-step="-1"/);
+assert.match(panel.shadowRoot.innerHTML, /data-tv-dinner-count-step="1"/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /id="tv-dinner-count" type="number"/);
 await panel._rollTvDinner();
 assert.equal(tvDinnerRequests, 1);
 assert.match(panel.shadowRoot.innerHTML, /2 TV dinners/);
+assert.match(panel.shadowRoot.innerHTML, /data-tv-dinner-meal-container="1"/);
+assert.match(panel.shadowRoot.innerHTML, /TV dinner/);
+assert.match(panel.shadowRoot.innerHTML, /tv-dinner-transfer/);
 assert.match(panel.shadowRoot.innerHTML, /Best-before and variety weighted random assignment/);
 assert.match(panel.shadowRoot.innerHTML, /Meal 1/);
 assert.match(panel.shadowRoot.innerHTML, /Roasted broccoli/);
 assert.match(panel.shadowRoot.innerHTML, /Chicken curry/);
 assert.match(panel.shadowRoot.innerHTML, /Salmon portions/);
+await panel._transferTvDinners();
+assert.deepEqual(serviceCalls.at(-1), {
+  domain: "mise_en_place_assistant",
+  service: "transfer_tv_dinners",
+  data: {
+    meals: [{
+      meal: 1,
+      complete: true,
+      container_type: "tv_dinner",
+      container_tag_id: "demo:tv-dinner-01",
+      components: {
+        veggie: { tag_id: "demo:broccoli", label: "Roasted broccoli", quantity: 1 },
+        starch: { tag_id: "demo:meal-rice", label: "Cooked basmati rice", quantity: 1 },
+        protein: { tag_id: "demo:curry", label: "Chicken curry", quantity: 1 },
+      },
+    }, {
+      meal: 2,
+      complete: true,
+      container_type: "tv_dinner",
+      container_tag_id: "demo:tv-dinner-02",
+      components: {
+        veggie: { tag_id: "demo:braised-greens", label: "Braised greens", quantity: 1 },
+        starch: { tag_id: "demo:sweet-potatoes", label: "Sweet potatoes", quantity: 1 },
+        protein: { tag_id: "demo:salmon", label: "Salmon portions", quantity: 1 },
+      },
+    }],
+  },
+});
 panel._tab = "meal-prep";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Meal Prep/);
@@ -604,7 +708,7 @@ assert.match(panel.shadowRoot.innerHTML, /class="card location-card type-freezer
 assert.match(panel.shadowRoot.innerHTML, /data-select-location="fridge" tabindex="0"/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /aria-expanded=/);
 assert.match(panel.shadowRoot.innerHTML, /class="row container-card kind-meal"/);
-assert.doesNotMatch(panel.shadowRoot.innerHTML, /class="row container-card kind-ingredient"/);
+assert.match(panel.shadowRoot.innerHTML, /class="row container-card kind-empty"/);
 assert.match(panel.shadowRoot.innerHTML, /ha-icon icon="mdi:fridge-outline"/);
 assert.match(panel.shadowRoot.innerHTML, /ha-icon icon="mdi:snowflake"/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /location-card-title">\s*<ha-icon/);
@@ -622,11 +726,11 @@ assert.match(panel.shadowRoot.innerHTML, /<span class="location-chip"><ha-icon i
 assert.match(panel.shadowRoot.innerHTML, /<span class="location-chip"><ha-icon icon="mdi:silverware-fork-knife"><\/ha-icon><span>Kitchen<\/span><\/span>/);
 assert.match(panel.shadowRoot.innerHTML, /<span>Status<\/span><strong>Storage automation clear<\/strong>/);
 assert.match(panel.shadowRoot.innerHTML, /<span>Sublocations<\/span><strong>1 active \/ 1 configured<\/strong>/);
-assert.match(panel.shadowRoot.innerHTML, /<span>Contents<\/span><strong>1 meal<\/strong>/);
+assert.match(panel.shadowRoot.innerHTML, /<span>Contents<\/span><strong>2 meal · 2 empty<\/strong>/);
 assert.match(panel.shadowRoot.innerHTML, /class="card storage-detail"/);
 assert.match(panel.shadowRoot.innerHTML, /class="sublocation-button active" data-location-id="fridge" data-select-sublocation="Top shelf"/);
 assert.match(panel.shadowRoot.innerHTML, /<strong>Top shelf<\/strong>/);
-assert.match(panel.shadowRoot.innerHTML, /Top shelf · 1 container/);
+assert.match(panel.shadowRoot.innerHTML, /Top shelf · 4 containers/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Door bin · 1 container/);
 assert.match(panel.shadowRoot.innerHTML, /Tomato sauce/);
 assert.match(panel.shadowRoot.innerHTML, /Sauce tub/);
@@ -636,8 +740,8 @@ assert.match(panel.shadowRoot.innerHTML, /Ready meal/);
 assert.match(panel.shadowRoot.innerHTML, /Fridge \/ Top shelf/);
 assert.match(panel.shadowRoot.innerHTML, /demo:sauce/);
 assert.match(panel.shadowRoot.innerHTML, /Low stock/);
-assert.doesNotMatch(panel.shadowRoot.innerHTML, /Empty/);
-assert.match(panel.shadowRoot.innerHTML, /1 item needs attention/);
+assert.match(panel.shadowRoot.innerHTML, /Empty/);
+assert.match(panel.shadowRoot.innerHTML, /2 items need attention/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /selected-chip/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, />Selected</);
 assert.match(panel.shadowRoot.innerHTML, /Storage automation clear/);
@@ -674,11 +778,13 @@ panel._selectedLocation = "freezer";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /class="card location-card type-freezer selected"/);
 assert.match(panel.shadowRoot.innerHTML, /class="row container-card kind-ingredient"/);
+assert.match(panel.shadowRoot.innerHTML, /class="row container-card kind-meal"/);
 assert.match(panel.shadowRoot.innerHTML, /<span>Status<\/span><strong>No live sensors<\/strong>/);
 assert.match(panel.shadowRoot.innerHTML, /class="sublocation-button active" data-location-id="freezer" data-select-sublocation="Door bin"/);
-assert.match(panel.shadowRoot.innerHTML, /Door bin · 1 container/);
+assert.match(panel.shadowRoot.innerHTML, /Door bin · 2 containers/);
 assert.match(panel.shadowRoot.innerHTML, /Frozen peas/);
 assert.match(panel.shadowRoot.innerHTML, /Freezer bin/);
+assert.match(panel.shadowRoot.innerHTML, /Microwave TV dinner/);
 assert.match(panel.shadowRoot.innerHTML, /Freezer \/ Door bin/);
 assert.match(panel.shadowRoot.innerHTML, /Tracked/);
 assert.match(panel.shadowRoot.innerHTML, /title="Mark physical container deleted" aria-label="Mark physical container deleted"/);
