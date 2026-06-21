@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.17 - 2026-06-20
+
+- Add complete-meal planning metadata, meal-prep panel views, and deleted-container lifecycle support while keeping archive/restore service aliases, because retired containers should not resurrect themselves like a bad migration hangover.
+
 ## 0.0.16 - 2026-06-20
 
 - Simplify Storage location cards by moving type icons into chips and removing leftover selected, expand, count, and add-container chrome.
