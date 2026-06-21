@@ -2519,8 +2519,9 @@ class MiseEnPlaceAssistantInventory:
         except (TypeError, ValueError):
             return 0
 
-    @staticmethod
+    @classmethod
     def _select_meal_component_sources(
+        cls,
         candidates: list[dict[str, Any]],
         needed: int,
     ) -> tuple[list[dict[str, Any]], int]:
@@ -2528,7 +2529,7 @@ class MiseEnPlaceAssistantInventory:
         selected: list[dict[str, Any]] = []
         ordered = sorted(
             candidates,
-            key=self._meal_candidate_rank,
+            key=cls._meal_candidate_rank,
         )
         for candidate in ordered:
             if remaining <= 0:
