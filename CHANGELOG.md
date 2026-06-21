@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.23 - 2026-06-21
+
+- Revise inventory and ready-meal presentation with product-focused stock details, relative freshness labels, quick actions, food-container mocks, and a paged ready-to-eat table that surfaces days since leaving the freezer.
+
 ## 0.0.22 - 2026-06-21
 
 - Add per-meal TV dinner assembly with source product/location details, stale-source validation, assembled meal labels, and paged inventory filtering, because dinner containers should not need a tiny logistics department.
