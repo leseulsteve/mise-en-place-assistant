@@ -67,12 +67,41 @@ const panel = new Panel();
 let inventoryUpdated;
 let eventsUnsubscribed = false;
 let overviewRequests = 0;
+let tvDinnerRequests = 0;
 const serviceCalls = [];
 panel.hass = {
   callService: async (domain, service, data) => {
     serviceCalls.push({ domain, service, data });
   },
-  callWS: async () => {
+  callWS: async (message) => {
+    if (message.type === "mise_en_place_assistant/tv_dinner_plan") {
+      tvDinnerRequests += 1;
+      assert.equal(message.meal_count, 2);
+      return {
+        meal_count: 2,
+        status: "ready",
+        complete: true,
+        meals: [{
+          meal: 1,
+          complete: true,
+          components: {
+            veggie: { label: "Roasted broccoli", family: "cruciferous", detail: "broccoli", location: "Fridge", sublocation: "Top shelf" },
+            starch: { label: "Cooked basmati rice", family: "rice", detail: "basmati_rice", location: "Fridge", sublocation: "Top shelf" },
+            protein: { label: "Chicken curry", family: "poultry", detail: "chicken", location: "Fridge", sublocation: "Top shelf" },
+          },
+        }, {
+          meal: 2,
+          complete: true,
+          components: {
+            veggie: { label: "Braised greens", family: "leafy_green", detail: "greens", location: "Fridge", sublocation: "Top shelf" },
+            starch: { label: "Sweet potatoes", family: "potato", detail: "sweet_potato", location: "Fridge", sublocation: "Top shelf" },
+            protein: { label: "Salmon portions", family: "fish", detail: "salmon", location: "Freezer", sublocation: "Top shelf" },
+          },
+        }],
+        shortages: {},
+        skipped: [],
+      };
+    }
     overviewRequests += 1;
     return {
     summary: { containers: 2, locations: 2, items: 1, foods: 2, recipes: 1, low: 1, dirty: 0 },
@@ -260,23 +289,23 @@ panel.hass = {
         name: "Meal Prep",
         state: "on",
         message: "Sunday prep",
-        start_time: "2026-06-21 10:00:00",
-        end_time: "2026-06-21 12:00:00",
+        start_date: "2026-06-21",
+        end_date: "2026-06-22",
       }],
       sessions: [{
         id: "prep_old",
         calendar_entity_id: "calendar.meal_prep",
         summary: "Last prep",
-        start_date_time: "2026-06-14T10:00",
-        end_date_time: "2026-06-14T12:00",
+        start_date_time: "2026-06-14",
+        end_date_time: "2026-06-14",
         status: "past",
         recipes: [{ id: "mocked:recipe:sauce", label: "Tomato sauce" }],
       }, {
         id: "prep_next",
         calendar_entity_id: "calendar.meal_prep",
         summary: "Next prep",
-        start_date_time: "2026-06-21T10:00",
-        end_date_time: "2026-06-21T12:00",
+        start_date_time: "2026-06-21",
+        end_date_time: "2026-06-21",
         status: "upcoming",
         recipes: [{ id: "mocked:recipe:sauce", label: "Tomato sauce" }],
       }],
@@ -450,6 +479,19 @@ assert.match(panel.shadowRoot.innerHTML, /Gram-counted pulled pork/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Add shopping item/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Shopping activity/);
 assert.doesNotMatch(panel.shadowRoot.innerHTML, /Shopping workflow/);
+panel._tab = "tv-dinner";
+panel._tvDinnerCount = 2;
+panel._render();
+assert.match(panel.shadowRoot.innerHTML, /Tv dinner/);
+assert.match(panel.shadowRoot.innerHTML, /tv-dinner-dice/);
+await panel._rollTvDinner();
+assert.equal(tvDinnerRequests, 1);
+assert.match(panel.shadowRoot.innerHTML, /2 TV dinners/);
+assert.match(panel.shadowRoot.innerHTML, /Best-before and variety weighted random assignment/);
+assert.match(panel.shadowRoot.innerHTML, /Meal 1/);
+assert.match(panel.shadowRoot.innerHTML, /Roasted broccoli/);
+assert.match(panel.shadowRoot.innerHTML, /Chicken curry/);
+assert.match(panel.shadowRoot.innerHTML, /Salmon portions/);
 panel._tab = "meal-prep";
 panel._render();
 assert.match(panel.shadowRoot.innerHTML, /Meal Prep/);
@@ -462,10 +504,14 @@ assert.match(panel.shadowRoot.innerHTML, /Home Assistant calendar/);
 assert.match(panel.shadowRoot.innerHTML, /calendar\.meal_prep/);
 assert.match(panel.shadowRoot.innerHTML, /New prep session/);
 assert.match(panel.shadowRoot.innerHTML, /Recipe chooser/);
+assert.match(panel.shadowRoot.innerHTML, /Shopping list preview/);
+assert.match(panel.shadowRoot.innerHTML, /Garlic/);
+assert.match(panel.shadowRoot.innerHTML, /2 cloves/);
 assert.match(panel.shadowRoot.innerHTML, /Recipe rank/);
 assert.match(panel.shadowRoot.innerHTML, /Session details/);
-assert.match(panel.shadowRoot.innerHTML, /Session name/);
-assert.match(panel.shadowRoot.innerHTML, /Scheduled date\/time/);
+assert.doesNotMatch(panel.shadowRoot.innerHTML, /Session name/);
+assert.match(panel.shadowRoot.innerHTML, /Scheduled date/);
+assert.match(panel.shadowRoot.innerHTML, /2026-06-21 · all day/);
 assert.match(panel.shadowRoot.innerHTML, /Recipes or meals included/);
 assert.match(panel.shadowRoot.innerHTML, /Number of servings/);
 assert.match(panel.shadowRoot.innerHTML, /Expected finished portions/);
@@ -479,8 +525,9 @@ assert.match(panel.shadowRoot.innerHTML, /Next prep/);
 assert.match(panel.shadowRoot.innerHTML, /Tomato sauce/);
 panel._tab = "attention";
 panel._render();
-assert.match(panel.shadowRoot.innerHTML, /Needs user attention/);
-assert.match(panel.shadowRoot.innerHTML, /Kitchen and inventory issues only/);
+assert.match(panel.shadowRoot.innerHTML, /Kitchen punch list/);
+assert.match(panel.shadowRoot.innerHTML, /Clear the list by fixing stale food, storage risks, and empty containers/);
+assert.match(panel.shadowRoot.innerHTML, /Open tasks/);
 assert.match(panel.shadowRoot.innerHTML, /Queue empty containers/);
 assert.match(panel.shadowRoot.innerHTML, /Queue shopping/);
 assert.match(panel.shadowRoot.innerHTML, /Fridge/);
@@ -494,15 +541,18 @@ panel._render();
 const prepForm = {
   elements: {
     entity_id: { value: "calendar.meal_prep" },
-    summary: { value: "Sunday prep" },
-    start_date_time: { value: "2026-06-21T10:00" },
-    end_date_time: { value: "2026-06-21T12:00" },
+    summary: { value: "Meal prep" },
+    start_date: { value: "2026-06-21" },
     description: { value: "Created from test" },
   },
   querySelectorAll(selector) {
-    return selector === 'input[name="recipe_ids"]:checked'
-      ? [{ value: "mocked:recipe:sauce" }]
-      : [];
+    if (selector === 'input[name="recipe_ids"]') {
+      return [{ value: "mocked:recipe:sauce", checked: true }];
+    }
+    if (selector === 'input[name="recipe_quantity"]') {
+      return [{ value: "3", dataset: { recipeId: "mocked:recipe:sauce" } }];
+    }
+    return [];
   },
 };
 await panel._createMealPrepCalendarEvent({ preventDefault() {}, currentTarget: prepForm });
@@ -511,9 +561,9 @@ assert.deepEqual(serviceCalls.at(-2), {
   service: "create_event",
   data: {
     entity_id: "calendar.meal_prep",
-    summary: "Sunday prep",
-    start_date_time: "2026-06-21T10:00",
-    end_date_time: "2026-06-21T12:00",
+    summary: "Meal prep",
+    start_date: "2026-06-21",
+    end_date: "2026-06-22",
     description: "Created from test",
   },
 });
@@ -522,10 +572,10 @@ assert.deepEqual(serviceCalls.at(-1), {
   service: "create_prep_session",
   data: {
     calendar_entity_id: "calendar.meal_prep",
-    name: "Sunday prep",
-    start_date_time: "2026-06-21T10:00",
-    end_date_time: "2026-06-21T12:00",
+    start_date_time: "2026-06-21",
+    end_date_time: "2026-06-21",
     recipe_ids: ["mocked:recipe:sauce"],
+    recipe_quantities: { "mocked:recipe:sauce": 3 },
     description: "Created from test",
   },
 });

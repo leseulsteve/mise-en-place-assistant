@@ -49,6 +49,7 @@ async def async_register_panel(hass: HomeAssistant) -> None:
     )
     hass.http.register_view(MiseEnPlaceAssistantPanelModuleView())
     websocket_api.async_register_command(hass, websocket_overview)
+    websocket_api.async_register_command(hass, websocket_tv_dinner_plan)
     try:
         await panel_custom.async_register_panel(
             hass,
@@ -148,6 +149,32 @@ def websocket_overview(
         len(data["logbook"]),
     )
     connection.send_result(msg["id"], data)
+
+
+@callback
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "mise_en_place_assistant/tv_dinner_plan",
+        vol.Optional("meal_count", default=1): vol.Coerce(int),
+    }
+)
+def websocket_tv_dinner_plan(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return a random complete-meal assignment for the TV dinner tool."""
+    try:
+        plan = _manager(hass).tv_dinner_plan(msg.get("meal_count", 1))
+    except (KeyError, StopIteration, TypeError, ValueError):
+        _LOGGER.exception("Could not build TV dinner plan response")
+        connection.send_error(
+            msg["id"],
+            "tv_dinner_plan_unavailable",
+            "TV dinner planning is unavailable",
+        )
+        return
+    connection.send_result(msg["id"], plan)
 
 
 def _manager(hass: HomeAssistant) -> MiseEnPlaceAssistantInventory:
@@ -342,6 +369,8 @@ def _calendar_options(hass: HomeAssistant) -> list[dict[str, Any]]:
                 "name": str(attrs.get("friendly_name") or state.name or state.entity_id),
                 "state": state.state,
                 "message": attrs.get("message") or "",
+                "start_date": attrs.get("start_date") or "",
+                "end_date": attrs.get("end_date") or "",
                 "start_time": attrs.get("start_time") or "",
                 "end_time": attrs.get("end_time") or "",
             }

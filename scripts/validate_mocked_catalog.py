@@ -61,7 +61,7 @@ def validate_mocked_catalog() -> None:
     _require(len(foods) >= 40, "mocked catalog should stay broad enough for panel and Dial tests")
     _require(len(stock) >= 10, "mocked stock should cover empty, low, normal, and attention states")
     _require(len(locations) >= 3, "mocked locations should cover fridge, freezer, and pantry flows")
-    _require(len(recipes) >= 5, "mocked recipes should cover prepared meal planning flows")
+    _require(len(recipes) >= 200, "mocked recipes should cover a broad Mealie-style recipe catalog")
 
     food_ids = _unique_ids(foods, "mocked food")
     recipe_ids = _unique_ids(recipes, "mocked recipe")
@@ -90,14 +90,32 @@ def validate_mocked_catalog() -> None:
         _require(isinstance(location["active"], bool), f"mocked location active flag must be boolean: {location}")
 
     recipe_tags = set()
+    component_counts = {"protein": 0, "vegetable": 0, "starch": 0}
+    families_by_component: dict[str, set[str]] = {component: set() for component in component_counts}
+    details_by_component: dict[str, set[str]] = {component: set() for component in component_counts}
     for recipe in recipes:
         _require(REQUIRED_RECIPE_FIELDS <= recipe.keys(), f"mocked recipe is missing fields: {recipe}")
         _require(recipe["unit"] == "portions", f"mocked recipes should remain portion-counted: {recipe}")
         _require(isinstance(recipe["tags"], list) and recipe["tags"], f"mocked recipe needs workflow tags: {recipe}")
         recipe_tags.update(recipe["tags"])
+        component = next((tag.removeprefix("mpa:component:") for tag in recipe["tags"] if tag.startswith("mpa:component:")), None)
+        if component in component_counts:
+            component_counts[component] += 1
+            for tag in recipe["tags"]:
+                if tag.startswith(("mpa:primary-protein:", "mpa:component-family:")):
+                    families_by_component[component].add(tag.rsplit(":", 1)[1])
+                if tag.startswith(("mpa:protein-detail:", "mpa:component-detail:")):
+                    details_by_component[component].add(tag.rsplit(":", 1)[1])
 
     _require(any(tag.startswith("mpa:component:") for tag in recipe_tags), "mocked recipes need component tags")
     _require(any(tag.startswith("mpa:primary-protein:") for tag in recipe_tags), "mocked recipes need primary protein tags")
+    _require(component_counts["protein"] >= 20, "mocked recipes need enough protein components for TV dinner dice")
+    _require(component_counts["vegetable"] >= 20, "mocked recipes need enough vegetable components for TV dinner dice")
+    _require(component_counts["starch"] >= 20, "mocked recipes need enough starch components for TV dinner dice")
+    for component, families in families_by_component.items():
+        _require(len(families) >= 4, f"mocked {component} recipes need enough families for TV dinner variety")
+    for component, details in details_by_component.items():
+        _require(len(details) >= 5, f"mocked {component} recipes need enough details for TV dinner variety")
     _no_private_text(foods + stock + locations + recipes, "mocked catalog")
 
 

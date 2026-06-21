@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from random import SystemRandom
 from uuid import UUID, uuid4, uuid5
 
 from collections.abc import Callable
@@ -62,6 +63,7 @@ from .mocked import MOCKED_FOODS, MOCKED_RECIPES, MOCKED_STOCK, MOCKED_STORAGE_L
 from .units import normalize_quantity, quantity_in_display_unit, units_are_compatible
 
 _LOGGER = logging.getLogger(__name__)
+_RANDOM = SystemRandom()
 
 # Product IDs belong to this integration, rather than to a catalog provider.
 # UUID5 makes the one-time migration deterministic while UUID4 identifies new
@@ -1541,23 +1543,34 @@ class MiseEnPlaceAssistantInventory:
         foods = {item["id"]: item for item in self.catalog_items()}
         recipes = {item["id"]: item for item in self.recipe_items()}
         examples = (
-            ("demo:spinach", "Produce bin", "mocked:baby-spinach", 180, "Fridge", "Bottom drawer", "ingredient"),
-            ("demo:eggs-low", "Egg carton", "mocked:eggs", 2, "Fridge", "Door bin", "ingredient"),
-            ("demo:milk-empty", "Milk carton", "mocked:whole-milk", 0, "Fridge", "Door bin", "ingredient"),
-            ("demo:rice", "Rice jar", "mocked:basmati-rice", 1200, "Pantry", "Dry goods", "ingredient"),
-            ("demo:coffee", "Coffee canister", "mocked:coffee", 350, "Pantry", "Coffee shelf", "ingredient"),
-            ("demo:peas", "Freezer peas", "mocked:frozen-peas", 600, "Freezer", "Door bin", "ingredient"),
-            ("demo:curry", "Curry portions", "mocked:recipe:chicken-curry", 3, "Fridge", "Top shelf", "meal"),
-            ("demo:vegetables", "Roast vegetables", "mocked:recipe:roast-vegetables", 4, "Fridge", "Top shelf", "meal"),
-            ("demo:meal-rice", "Cooked rice", "mocked:recipe:rice", 1, "Fridge", "Top shelf", "meal"),
-            ("demo:broccoli", "Roasted broccoli", "mocked:recipe:broccoli", 2, "Fridge", "Top shelf", "meal"),
-            ("demo:sweet-potatoes", "Sweet potatoes", "mocked:recipe:sweet-potatoes", 3, "Fridge", "Top shelf", "meal"),
-            ("demo:salmon", "Salmon portions", "mocked:recipe:salmon", 2, "Freezer", "Top shelf", "meal"),
-            ("demo:noodles", "Sesame noodles", "mocked:recipe:noodles", 2, "Fridge", "Top shelf", "meal"),
-            ("demo:lentil-loaf", "Lentil loaf", "mocked:recipe:lentil-loaf", 0, "Freezer", "Top shelf", "recipe"),
+            ("demo:spinach", "Produce bin", "mocked:baby-spinach", 180, "Fridge", "Bottom drawer", "ingredient", None),
+            ("demo:eggs-low", "Egg carton", "mocked:eggs", 2, "Fridge", "Door bin", "ingredient", None),
+            ("demo:milk-empty", "Milk carton", "mocked:whole-milk", 0, "Fridge", "Door bin", "ingredient", None),
+            ("demo:rice", "Rice jar", "mocked:basmati-rice", 1200, "Pantry", "Dry goods", "ingredient", None),
+            ("demo:coffee", "Coffee canister", "mocked:coffee", 350, "Pantry", "Coffee shelf", "ingredient", None),
+            ("demo:peas", "Freezer peas", "mocked:frozen-peas", 600, "Freezer", "Door bin", "ingredient", None),
+            ("demo:curry", "Curry portions", "mocked:recipe:chicken-curry", 4, "Fridge", "Top shelf", "meal", "2026-06-24"),
+            ("demo:turkey-meatballs", "Turkey meatballs", "mocked:recipe:turkey-meatballs", 3, "Fridge", "Top shelf", "meal", "2026-06-27"),
+            ("demo:beef-stew", "Beef stew", "mocked:recipe:beef-stew", 3, "Freezer", "Top shelf", "meal", "2026-07-20"),
+            ("demo:salmon", "Salmon portions", "mocked:recipe:salmon", 3, "Freezer", "Top shelf", "meal", "2026-07-04"),
+            ("demo:tofu-squares", "Tofu squares", "mocked:recipe:tofu-squares", 3, "Fridge", "Top shelf", "meal", "2026-06-29"),
+            ("demo:lentil-portions", "Lentil loaf portions", "mocked:recipe:lentil-loaf", 2, "Freezer", "Top shelf", "meal", "2026-07-12"),
+            ("demo:vegetables", "Roast vegetables", "mocked:recipe:roast-vegetables", 4, "Fridge", "Top shelf", "meal", "2026-06-25"),
+            ("demo:broccoli", "Roasted broccoli", "mocked:recipe:broccoli", 3, "Fridge", "Top shelf", "meal", "2026-06-23"),
+            ("demo:braised-greens", "Braised greens", "mocked:recipe:braised-greens", 3, "Fridge", "Top shelf", "meal", "2026-06-26"),
+            ("demo:carrots", "Roasted carrots", "mocked:recipe:carrots", 3, "Fridge", "Top shelf", "meal", "2026-06-30"),
+            ("demo:buttered-peas", "Buttered peas", "mocked:recipe:peas", 3, "Freezer", "Door bin", "meal", "2026-07-06"),
+            ("demo:mealie-veg-peas", "Soy ginger peas", "mocked:recipe:mealie-vegetable-038", 3, "Freezer", "Door bin", "meal", "2026-07-08"),
+            ("demo:mealie-veg-corn", "Lemon herb corn", "mocked:recipe:mealie-vegetable-020", 2, "Freezer", "Door bin", "meal", "2026-07-10"),
+            ("demo:meal-rice", "Cooked rice", "mocked:recipe:rice", 4, "Fridge", "Top shelf", "meal", "2026-06-24"),
+            ("demo:sweet-potatoes", "Sweet potatoes", "mocked:recipe:sweet-potatoes", 4, "Fridge", "Top shelf", "meal", "2026-06-28"),
+            ("demo:noodles", "Sesame noodles", "mocked:recipe:noodles", 3, "Fridge", "Top shelf", "meal", "2026-06-26"),
+            ("demo:mealie-starch-oats", "Grain bowl oats", "mocked:recipe:mealie-starch-015", 3, "Pantry", "Dry goods", "meal", "2026-07-03"),
+            ("demo:mealie-starch-bread", "Roasted sourdough", "mocked:recipe:mealie-starch-018", 2, "Pantry", "Dry goods", "meal", "2026-07-02"),
+            ("demo:lentil-loaf", "Lentil loaf", "mocked:recipe:lentil-loaf", 0, "Freezer", "Top shelf", "recipe", None),
         )
         created = 0
-        for tag_id, name, item_id, quantity, location, sublocation, content_kind in examples:
+        for tag_id, name, item_id, quantity, location, sublocation, content_kind, best_before_date in examples:
             item = foods.get(item_id) or recipes.get(item_id)
             if item is None:
                 continue
@@ -1574,6 +1587,7 @@ class MiseEnPlaceAssistantInventory:
                 source_provider=str(item.get("provider") or self.catalog_provider()),
                 content_kind=content_kind,
                 classification=self._recipe_classification(item) if item_id in recipes else None,
+                best_before_date=best_before_date,
             )
             created += 1
         return created
@@ -1588,12 +1602,23 @@ class MiseEnPlaceAssistantInventory:
             "demo:coffee": "Coffee shelf",
             "demo:peas": "Door bin",
             "demo:curry": "Top shelf",
+            "demo:turkey-meatballs": "Top shelf",
+            "demo:beef-stew": "Top shelf",
+            "demo:tofu-squares": "Top shelf",
+            "demo:lentil-portions": "Top shelf",
             "demo:vegetables": "Top shelf",
             "demo:meal-rice": "Top shelf",
             "demo:broccoli": "Top shelf",
+            "demo:braised-greens": "Top shelf",
+            "demo:carrots": "Top shelf",
+            "demo:buttered-peas": "Door bin",
+            "demo:mealie-veg-peas": "Door bin",
+            "demo:mealie-veg-corn": "Door bin",
             "demo:sweet-potatoes": "Top shelf",
             "demo:salmon": "Top shelf",
             "demo:noodles": "Top shelf",
+            "demo:mealie-starch-oats": "Dry goods",
+            "demo:mealie-starch-bread": "Dry goods",
             "demo:lentil-loaf": "Top shelf",
         }
         changed = False
@@ -1906,22 +1931,25 @@ class MiseEnPlaceAssistantInventory:
         self,
         *,
         calendar_entity_id: str,
-        summary: str,
         start_date_time: str,
         end_date_time: str,
         recipe_ids: list[str],
+        recipe_quantities: dict[str, Any] | None = None,
+        summary: str = "",
         description: str = "",
     ) -> dict[str, Any]:
         """Store meal-prep details while Home Assistant calendar owns scheduling."""
         calendar_entity_id = str(calendar_entity_id or "").strip()
         if not calendar_entity_id.startswith("calendar."):
             raise ValueError("Prep session calendar must be a Home Assistant calendar entity")
-        summary = str(summary or "").strip()
-        if not summary:
-            raise ValueError("Prep session summary is required")
         if not start_date_time or not end_date_time:
             raise ValueError("Prep session start and end times are required")
+        session_date = str(start_date_time)[:10]
+        if len(session_date) != 10:
+            raise ValueError("Prep session start date is required")
+        summary = str(summary or "").strip() or "Meal prep"
         recipes_by_id = {str(recipe.get("id")): recipe for recipe in self.recipe_items() if recipe.get("id")}
+        recipe_quantities = recipe_quantities if isinstance(recipe_quantities, dict) else {}
         selected_recipes = []
         for recipe_id in recipe_ids:
             recipe_id = str(recipe_id or "").strip()
@@ -1935,28 +1963,46 @@ class MiseEnPlaceAssistantInventory:
                     "id": recipe_id,
                     "label": recipe.get("label") or recipe_id,
                     "provider": recipe.get("provider") or "",
+                    "quantity": max(1, int(_as_float(recipe_quantities.get(recipe_id), 1))),
                 }
             )
         now = _utc_now()
-        session = {
-            "id": f"prep_{uuid4().hex}",
-            "calendar_entity_id": calendar_entity_id,
-            "summary": summary,
-            "start_date_time": str(start_date_time),
-            "end_date_time": str(end_date_time),
-            "description": str(description or "").strip(),
-            "recipes": selected_recipes,
-            "created_at": now,
-            "updated_at": now,
-        }
-        self.prep_sessions().append(session)
+        session = next(
+            (
+                existing
+                for existing in self.prep_sessions()
+                if isinstance(existing, dict)
+                and existing.get("calendar_entity_id") == calendar_entity_id
+                and str(existing.get("start_date_time") or "")[:10] == session_date
+            ),
+            None,
+        )
+        if session is None:
+            session = {
+                "id": f"prep_{uuid4().hex}",
+                "created_at": now,
+            }
+            self.prep_sessions().append(session)
+        session.update(
+            {
+                "calendar_entity_id": calendar_entity_id,
+                "summary": summary,
+                "start_date_time": str(start_date_time),
+                "end_date_time": str(end_date_time),
+                "description": str(description or "").strip(),
+                "recipes": selected_recipes,
+                "updated_at": now,
+            }
+        )
         self._add_log_entry(
-            "Prep session created",
+            "Prep session saved",
             f"{summary} was linked to {calendar_entity_id}.",
             {
                 "session_id": session["id"],
                 "calendar_entity_id": calendar_entity_id,
+                "date": session_date,
                 "recipe_ids": [recipe["id"] for recipe in selected_recipes],
+                "recipe_quantities": {recipe["id"]: recipe["quantity"] for recipe in selected_recipes},
             },
         )
         await self.async_save()
@@ -2291,6 +2337,111 @@ class MiseEnPlaceAssistantInventory:
         if requested <= 0 or requested != float(meal_count):
             raise ValueError("meal_count must be a positive whole number")
 
+        groups, skipped = self._complete_meal_candidates()
+
+        uses: dict[str, list[dict[str, Any]]] = {}
+        shortages: dict[str, dict[str, Any]] = {}
+        for role, candidates in groups.items():
+            selected, shortage = self._select_meal_component_sources(candidates, requested)
+            uses[role] = selected
+            if shortage > 0:
+                shortages[role] = {
+                    "needed": requested,
+                    "available": requested - shortage,
+                    "missing": shortage,
+                }
+
+        return {
+            "meal_count": requested,
+            "status": "ready" if not shortages else "short",
+            "complete": not shortages,
+            "uses": uses,
+            "shortages": shortages,
+            "skipped": skipped,
+            "rules": [
+                "1 veggie portion, 1 starch portion, and 1 protein portion per meal",
+                "Preview only: inventory is not moved or consumed",
+                "Only portion-compatible units are eligible",
+            ],
+        }
+
+    def tv_dinner_plan(self, meal_count: int | float = 1) -> dict[str, Any]:
+        """Randomly assign complete meal components without mutating inventory."""
+        try:
+            requested = int(float(meal_count))
+        except (TypeError, ValueError) as err:
+            raise ValueError("meal_count must be a positive whole number") from err
+        if requested <= 0 or requested != float(meal_count):
+            raise ValueError("meal_count must be a positive whole number")
+
+        groups, skipped = self._complete_meal_candidates()
+        remaining = {
+            role: [{**candidate, "remaining": int(float(candidate["available"]))} for candidate in candidates]
+            for role, candidates in groups.items()
+        }
+        meals: list[dict[str, Any]] = []
+        shortages: dict[str, dict[str, Any]] = {}
+        role_labels = {"veggie": "Veggie", "starch": "Starch", "protein": "Protein"}
+        family_usage: dict[str, dict[str, int]] = {role: {} for role in role_labels}
+        detail_usage: dict[str, dict[str, int]] = {role: {} for role in role_labels}
+
+        for index in range(1, requested + 1):
+            components: dict[str, dict[str, Any]] = {}
+            missing: list[str] = []
+            for role in ("veggie", "starch", "protein"):
+                candidates = self._ranked_meal_candidates(
+                    [candidate for candidate in remaining[role] if candidate["remaining"] > 0]
+                )
+                if not candidates:
+                    missing.append(role)
+                    continue
+                chosen = self._weighted_random_meal_candidate(
+                    candidates,
+                    used_families=family_usage[role],
+                    used_details=detail_usage[role],
+                )
+                chosen["remaining"] -= 1
+                family = str(chosen.get("family") or "unknown")
+                detail = str(chosen.get("detail") or "")
+                if family and family != "unknown":
+                    family_usage[role][family] = family_usage[role].get(family, 0) + 1
+                if detail:
+                    detail_usage[role][detail] = detail_usage[role].get(detail, 0) + 1
+                components[role] = {
+                    key: value
+                    for key, value in chosen.items()
+                    if key not in {"available", "remaining"}
+                }
+                components[role]["quantity"] = 1
+            meals.append({"meal": index, "complete": not missing, "components": components, "missing": missing})
+
+        for role in ("veggie", "starch", "protein"):
+            available = sum(max(0, int(candidate.get("available", 0))) for candidate in groups[role])
+            if available < requested:
+                shortages[role] = {
+                    "label": role_labels[role],
+                    "needed": requested,
+                    "available": available,
+                    "missing": requested - available,
+                }
+
+        return {
+            "meal_count": requested,
+            "status": "ready" if not shortages else "short",
+            "complete": not shortages,
+            "meals": meals,
+            "shortages": shortages,
+            "skipped": skipped,
+            "rules": [
+                "Randomly assigns 1 veggie, 1 starch, and 1 protein per meal",
+                "Weights earlier best-before dates and less-repeated component families/details higher",
+                "Preview only: inventory is not moved or consumed",
+                "Only products with meal_component_role and portion-compatible units are eligible",
+            ],
+        }
+
+    def _complete_meal_candidates(self) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+        """Return eligible complete-meal component containers and skipped rows."""
         groups: dict[str, list[dict[str, Any]]] = {"veggie": [], "starch": [], "protein": []}
         skipped: list[dict[str, Any]] = []
         for container in self.active_containers():
@@ -2331,32 +2482,7 @@ class MiseEnPlaceAssistantInventory:
                     "updated_at": container.get("updated_at") or "",
                 }
             )
-
-        uses: dict[str, list[dict[str, Any]]] = {}
-        shortages: dict[str, dict[str, Any]] = {}
-        for role, candidates in groups.items():
-            selected, shortage = self._select_meal_component_sources(candidates, requested)
-            uses[role] = selected
-            if shortage > 0:
-                shortages[role] = {
-                    "needed": requested,
-                    "available": requested - shortage,
-                    "missing": shortage,
-                }
-
-        return {
-            "meal_count": requested,
-            "status": "ready" if not shortages else "short",
-            "complete": not shortages,
-            "uses": uses,
-            "shortages": shortages,
-            "skipped": skipped,
-            "rules": [
-                "1 veggie portion, 1 starch portion, and 1 protein portion per meal",
-                "Preview only: inventory is not moved or consumed",
-                "Only portion-compatible units are eligible",
-            ],
-        }
+        return groups, skipped
 
     def _container_meal_classification(self, container: dict[str, Any]) -> dict[str, str]:
         """Return normalized complete-meal classification for a container."""
@@ -2402,13 +2528,7 @@ class MiseEnPlaceAssistantInventory:
         selected: list[dict[str, Any]] = []
         ordered = sorted(
             candidates,
-            key=lambda candidate: (
-                candidate.get("best_before_date") or "9999-12-31",
-                0 if candidate.get("opened_date") else 1,
-                candidate.get("available", 0),
-                candidate.get("updated_at") or "",
-                candidate.get("label") or "",
-            ),
+            key=self._meal_candidate_rank,
         )
         for candidate in ordered:
             if remaining <= 0:
@@ -2419,6 +2539,62 @@ class MiseEnPlaceAssistantInventory:
             selected.append({**candidate, "quantity": int(take) if take.is_integer() else take})
             remaining -= int(take) if take.is_integer() else take
         return selected, int(remaining) if float(remaining).is_integer() else remaining
+
+    @staticmethod
+    def _meal_candidate_rank(candidate: dict[str, Any]) -> tuple:
+        """Rank meal candidates by use-soonest freshness signals."""
+        return (
+            candidate.get("best_before_date") or "9999-12-31",
+            0 if candidate.get("opened_date") else 1,
+            candidate.get("available", 0),
+            candidate.get("updated_at") or "",
+            candidate.get("label") or "",
+        )
+
+    @classmethod
+    def _ranked_meal_candidates(cls, candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Return candidates in best-before/use-soonest order."""
+        return sorted(candidates, key=cls._meal_candidate_rank)
+
+    @classmethod
+    def _weighted_random_meal_candidate(
+        cls,
+        candidates: list[dict[str, Any]],
+        *,
+        used_families: dict[str, int] | None = None,
+        used_details: dict[str, int] | None = None,
+    ) -> dict[str, Any]:
+        """Randomly choose a candidate while favoring freshness and variety."""
+        ranked = cls._ranked_meal_candidates(candidates)
+        weights = [
+            cls._meal_candidate_weight(candidate, len(ranked) - rank, used_families or {}, used_details or {})
+            for rank, candidate in enumerate(ranked)
+        ]
+        total = sum(weights)
+        draw = _RANDOM.randint(1, total)
+        running = 0
+        for candidate, weight in zip(ranked, weights):
+            running += weight
+            if draw <= running:
+                return candidate
+        return ranked[-1]
+
+    @staticmethod
+    def _meal_candidate_weight(
+        candidate: dict[str, Any],
+        freshness_weight: int,
+        used_families: dict[str, int],
+        used_details: dict[str, int],
+    ) -> int:
+        """Return a positive random weight that rewards freshness and variety."""
+        family = str(candidate.get("family") or "unknown")
+        detail = str(candidate.get("detail") or "")
+        family_penalty = used_families.get(family, 0) if family != "unknown" else 0
+        detail_penalty = used_details.get(detail, 0) if detail else 0
+        variety_multiplier = 9
+        variety_multiplier -= min(4, family_penalty * 3)
+        variety_multiplier -= min(3, detail_penalty * 3)
+        return max(1, freshness_weight * max(1, variety_multiplier))
 
     def _resolve_product_id(self, item_id: str | None, label: str | None, item_format: str | None,
                             unit: str | None, source_provider: str = "local",

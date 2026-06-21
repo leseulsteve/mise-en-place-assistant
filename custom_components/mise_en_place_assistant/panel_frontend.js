@@ -20,8 +20,11 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this._busyAction ??= "";
     this._planningFilter ??= "all";
     this._mealPlanCount ??= 1;
+    this._tvDinnerCount ??= 1;
+    this._tvDinnerPlan ??= null;
     this._mealPrepSummaryDraft ??= "";
     this._selectedPrepSessionId ??= "";
+    this._prepRecipeSelection ??= {};
     this._tab = this._normalizeTab(this._tab ?? "dashboard");
     this._render();
     this._load();
@@ -119,7 +122,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     if (tab === "manage") {
       return "storage";
     }
-    return ["dashboard", "inventory", "storage", "planning", "meal-prep", "attention", "info", "dev"].includes(tab) ? tab : "dashboard";
+    return ["dashboard", "inventory", "storage", "planning", "tv-dinner", "meal-prep", "attention", "info", "dev"].includes(tab) ? tab : "dashboard";
   }
 
   _render() {
@@ -144,6 +147,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       ["inventory", "Inventory"],
       ["storage", "Storage"],
       ["planning", "Planning"],
+      ["tv-dinner", "Tv dinner"],
       ["meal-prep", "Meal Prep"],
       ["attention", "Attention"],
       ["info", "Info"],
@@ -157,13 +161,15 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           ? this._attentionView(data)
           : this._tab === "meal-prep"
             ? this._mealPrepView(mealPrep, data)
-            : this._tab === "planning"
-              ? this._planningView(mealInventory, data, foods, logbook)
-              : this._tab === "storage"
-                ? this._storageView(locations, containers, foods, recipes, areas)
-                : this._tab === "inventory"
-                  ? this._inventoryView(items, containers, locations)
-                  : this._dashboardView(summary, mealInventory, items, containers, locations, logbook, data);
+            : this._tab === "tv-dinner"
+              ? this._tvDinnerView(data)
+              : this._tab === "planning"
+                ? this._planningView(mealInventory, data, foods, logbook)
+                : this._tab === "storage"
+                  ? this._storageView(locations, containers, foods, recipes, areas)
+                  : this._tab === "inventory"
+                    ? this._inventoryView(items, containers, locations)
+                    : this._dashboardView(summary, mealInventory, items, containers, locations, logbook, data);
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -248,6 +254,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
           border: 1px solid rgba(244, 67, 54, 0.35);
         }
         .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+        .prep-quantity { width: 72px; }
         .toolbar {
           display: flex;
           align-items: center;
@@ -863,6 +870,12 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       event.currentTarget.value = String(count);
       this._load();
     });
+    this.shadowRoot.getElementById("tv-dinner-count")?.addEventListener("change", (event) => {
+      const count = Math.max(1, Math.floor(Number(event.currentTarget.value) || 1));
+      this._tvDinnerCount = count;
+      event.currentTarget.value = String(count);
+    });
+    this.shadowRoot.getElementById("tv-dinner-dice")?.addEventListener("click", () => this._rollTvDinner());
     this.shadowRoot.getElementById("add-location")?.addEventListener("click", () => { if (this._isBusy()) return; this._editingLocation = ""; this._showLocation = !this._showLocation; this._render(); });
     this.shadowRoot.getElementById("create-form")?.addEventListener("submit", (event) => this._createContainer(event));
     this.shadowRoot.getElementById("edit-container-form")?.addEventListener("submit", (event) => this._saveContainerEdit(event));
@@ -918,6 +931,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     this.shadowRoot.querySelectorAll("[data-sync-missing-products]").forEach((button) => button.addEventListener("click", () => this._syncMissingProducts()));
     this.shadowRoot.querySelectorAll("[data-clone-prep-session]").forEach((button) => button.addEventListener("click", () => this._clonePrepSession(button)));
     this.shadowRoot.querySelectorAll("[data-select-prep-session]").forEach((button) => button.addEventListener("click", () => this._selectPrepSession(button)));
+    this.shadowRoot.querySelectorAll("[data-prep-recipe-input]").forEach((input) => input.addEventListener("input", () => this._updatePrepShoppingPreview()));
+    this.shadowRoot.querySelectorAll("[data-prep-recipe-input]").forEach((input) => input.addEventListener("change", () => this._updatePrepShoppingPreview()));
     this.shadowRoot.querySelectorAll("[data-suggested-service]").forEach((button) => button.addEventListener("click", () => this._runSuggestedService(button)));
     this.shadowRoot.querySelectorAll("[data-suggested-tab]").forEach((button) => button.addEventListener("click", () => { if (this._isBusy()) return; this._tab = this._normalizeTab(button.dataset.suggestedTab); this._render(); }));
     this.shadowRoot.getElementById("dev-refresh")?.addEventListener("click", () => this._load());
@@ -1090,13 +1105,78 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     `;
   }
 
+  _tvDinnerView(data) {
+    const plan = this._tvDinnerPlan || data?.tv_dinner_plan || null;
+    return `
+      <section class="sections single">
+        <div class="stack">
+          <section class="card">
+            <div class="toolbar">
+              <h2>Tv dinner</h2>
+              <div class="actions">
+                <label>Meals<input id="tv-dinner-count" type="number" min="1" step="1" value="${this._safe(this._tvDinnerCount || 1)}" /></label>
+                <button type="button" id="tv-dinner-dice" title="Roll TV dinner" aria-label="Roll TV dinner"><ha-icon icon="mdi:dice-multiple"></ha-icon></button>
+              </div>
+            </div>
+            ${plan ? this._tvDinnerPlanView(plan) : this._empty("Roll for complete meals.")}
+          </section>
+        </div>
+      </section>
+    `;
+  }
+
+  _tvDinnerPlanView(plan = {}) {
+    const shortages = Object.values(plan.shortages || {});
+    const meals = plan.meals || [];
+    const skipped = (plan.skipped || []).slice(0, 6).map((item) => `<p class="muted subline">${this._safe(item.label)}: ${this._safe(item.reason)}</p>`).join("");
+    return `
+      <div class="summary-row ${plan.complete ? "ok" : "warn"}">
+        <p class="name">${plan.complete ? `${this._safe(plan.meal_count || meals.length || 1)} TV dinner${Number(plan.meal_count || meals.length || 1) === 1 ? "" : "s"}` : "Missing components"}</p>
+        <p class="muted subline">Best-before and variety weighted random assignment</p>
+      </div>
+      ${shortages.length ? `<div class="row compact-row"><div><p class="name">Shortages</p>${shortages.map((item) => `<p class="muted subline">${this._safe(item.label || "")}: missing ${this._safe(item.missing)}</p>`).join("")}</div></div>` : ""}
+      <div class="recipe-grid">${meals.map((meal) => this._tvDinnerMeal(meal)).join("")}</div>
+      ${skipped ? `<div class="row compact-row"><div><p class="name">Skipped</p>${skipped}</div></div>` : ""}
+    `;
+  }
+
+  _tvDinnerMeal(meal = {}) {
+    const components = meal.components || {};
+    const rows = [
+      ["veggie", "Veggie"],
+      ["starch", "Starch"],
+      ["protein", "Protein"],
+    ].map(([role, label]) => {
+      const component = components[role];
+      return component
+        ? `<p class="muted subline"><strong>${label}</strong>: ${this._safe(component.label)}${this._componentDiversity(component)}${this._componentPlace(component)}</p>`
+        : `<p class="muted subline"><strong>${label}</strong>: missing</p>`;
+    }).join("");
+    return `<article class="row compact-row">
+      <div>
+        <p class="name">Meal ${this._safe(meal.meal || "")}</p>
+        ${rows}
+      </div>
+    </article>`;
+  }
+
+  _componentDiversity(component = {}) {
+    const diversity = [component.family && component.family !== "unknown" ? component.family : "", component.detail || ""].filter(Boolean).join(" · ");
+    return diversity ? ` · ${this._safe(diversity)}` : "";
+  }
+
+  _componentPlace(component = {}) {
+    const place = [component.location, component.sublocation].filter(Boolean).join(" / ");
+    return place ? ` · ${this._safe(place)}` : "";
+  }
+
   _mealPrepView(mealPrep = {}, data = {}) {
     const readiness = data?.readiness || {};
     const completeMealPlan = data?.complete_meal_plan || {};
     const calendars = mealPrep.calendar_entities || [];
     const prepCalendar = this._prepCalendar(mealPrep);
     const recipeSuggestions = data?.recipe_suggestions || [];
-    const defaultSummary = this._mealPrepSummaryDraft || `Meal prep: ${mealPrep.meal_count || completeMealPlan.meal_count || 1} complete meals`;
+    const defaultSummary = this._mealPrepSummaryDraft || "Meal prep";
     return `
       <section class="sections">
         <div class="stack">
@@ -1120,6 +1200,10 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
         </div>
         <div class="stack">
           <section class="card">
+            <h2>Shopping list preview</h2>
+            <div id="prep-shopping-preview">${this._prepShoppingPreview(recipeSuggestions, this._prepRecipeSelectionFromState(recipeSuggestions))}</div>
+          </section>
+          <section class="card">
             <h2>Recipe rank</h2>
             ${recipeSuggestions.length ? recipeSuggestions.map((recipe) => this._prepRecipeRankRow(recipe)).join("") : this._empty("No ranked recipes until Mealie recipes expose ingredient details.")}
           </section>
@@ -1137,28 +1221,28 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const critical = rows.filter((row) => row.status === "critical").length;
     const warning = rows.filter((row) => row.status === "warning" || row.status === "empty").length;
     const grouped = [
-      ["critical", "Critical"],
-      ["warning", "Needs action"],
-      ["empty", "Empty / low"],
-      ["review", "Review"],
+      ["critical", "Fix first"],
+      ["warning", "Act next"],
+      ["empty", "Empty or low stock"],
+      ["review", "Review when convenient"],
     ];
     return `
       <section class="stack">
         <section class="grid">
-          ${this._metric("Needs attention", rows.length, rows.length ? "warn" : "ok")}
+          ${this._metric("Open tasks", rows.length, rows.length ? "warn" : "ok")}
           ${this._metric("Critical", critical, critical ? "critical" : "")}
-          ${this._metric("Actionable", warning, warning ? "warn" : "")}
-          ${this._metric("Suggestions", this._actionableSuggestedActions(data?.suggested_actions || []).length)}
+          ${this._metric("Action needed", warning, warning ? "warn" : "")}
+          ${this._metric("Suggested actions", this._actionableSuggestedActions(data?.suggested_actions || []).length)}
         </section>
         <section class="card">
           <div class="toolbar">
             <div>
-              <h2>Needs user attention</h2>
-              <p class="muted subline">Kitchen and inventory issues only.</p>
+              <h2>Kitchen punch list</h2>
+              <p class="muted subline">Clear the list by fixing stale food, storage risks, and empty containers.</p>
             </div>
             <button type="button" class="secondary" data-open-tab="planning">Planning</button>
           </div>
-          ${rows.length ? grouped.map(([status, label]) => this._attentionGroup(label, rows.filter((row) => row.group === status))).join("") : this._empty("Nothing needs user attention.")}
+          ${rows.length ? grouped.map(([status, label]) => this._attentionGroup(label, rows.filter((row) => row.group === status))).join("") : this._empty("List clear.")}
         </section>
       </section>
     `;
@@ -1291,8 +1375,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const activeRows = active.map((event) => ({
       id: this._prepCalendarEventId(event),
       summary: event.name || event.message || "Active calendar session",
-      start_date_time: event.start_time || "",
-      end_date_time: event.end_time || "",
+      start_date_time: event.start_date || event.start_time || "",
+      end_date_time: event.end_date || event.end_time || "",
       calendar_entity_id: event.entity_id || "",
       status: event.state === "on" ? "now" : "calendar",
       recipes: [],
@@ -1313,7 +1397,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     });
     const selected = this._selectedPrepSessionId && this._selectedPrepSessionId === sessionId;
     return this._summaryRow(session.summary || "Meal prep session", [
-      [session.start_date_time, session.end_date_time].filter(Boolean).join(" to "),
+      this._prepScheduleLabel(session),
       session.calendar_entity_id || "",
       recipes,
     ], {
@@ -1328,9 +1412,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       <input type="hidden" name="entity_id" value="${this._safe(calendar.entity_id)}" />
       <p class="muted subline">Prep sessions will be scheduled in ${this._safe(calendar.name)} (${this._safe(calendar.entity_id)}).</p>
       <div class="form-grid">
-        <label>Session name<input name="summary" required value="${this._safe(defaultSummary)}" /></label>
-        <label>Start<input name="start_date_time" required type="datetime-local" /></label>
-        <label>End<input name="end_date_time" required type="datetime-local" /></label>
+        <input type="hidden" name="summary" value="${this._safe(defaultSummary)}" />
+        <label>Prep date<input name="start_date" required type="date" /></label>
         <label>Description<textarea name="description" rows="3">Created from Mise en Place Assistant meal prep readiness.</textarea></label>
       </div>
       <div class="readiness-section" style="margin-top: 12px;">
@@ -1345,15 +1428,116 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     if (!recipeSuggestions.length) {
       return this._empty("No ranked recipes available.");
     }
+    const selection = this._prepRecipeSelectionFromState(recipeSuggestions);
     return recipeSuggestions.slice(0, 8).map((recipe, index) => {
       const bestBefore = (recipe.best_before || [])[0];
       const urgency = bestBefore ? ` · best before ${this._safe(bestBefore.best_before_date)}` : "";
       const missing = recipe.missing_count ? ` · ${this._safe(recipe.missing_count)} missing` : "";
+      const checked = selection[recipe.id]?.selected ?? index === 0;
+      const quantity = selection[recipe.id]?.quantity || 1;
       return `<label class="row compact-row">
-        <span><input type="checkbox" name="recipe_ids" value="${this._safe(recipe.id)}"${index === 0 ? " checked" : ""} /> ${this._safe(recipe.label)}</span>
+        <span><input type="checkbox" name="recipe_ids" value="${this._safe(recipe.id)}" data-prep-recipe-input data-recipe-id="${this._safe(recipe.id)}"${checked ? " checked" : ""} /> ${this._safe(recipe.label)}</span>
+        <span class="actions"><input class="prep-quantity" type="number" min="1" step="1" name="recipe_quantity" data-prep-recipe-input data-recipe-id="${this._safe(recipe.id)}" value="${this._safe(quantity)}" aria-label="${this._safe(recipe.label)} quantity" /></span>
         <span class="muted">${this._safe(recipe.matched_count || 0)}/${this._safe(recipe.ingredient_count || 0)}${urgency}${missing}</span>
       </label>`;
     }).join("");
+  }
+
+  _prepRecipeSelectionFromState(recipeSuggestions = []) {
+    const selection = {};
+    recipeSuggestions.slice(0, 8).forEach((recipe, index) => {
+      const existing = this._prepRecipeSelection[recipe.id] || {};
+      selection[recipe.id] = {
+        selected: existing.selected ?? index === 0,
+        quantity: this._prepPositiveNumber(existing.quantity, 1),
+      };
+    });
+    return selection;
+  }
+
+  _prepRecipeSelectionFromForm(form) {
+    const selection = {};
+    form.querySelectorAll('input[name="recipe_ids"]').forEach((input) => {
+      const recipeId = input.value;
+      const quantityInput = [...form.querySelectorAll('input[name="recipe_quantity"]')].find((candidate) => candidate.dataset.recipeId === recipeId);
+      selection[recipeId] = {
+        selected: Boolean(input.checked),
+        quantity: this._prepPositiveNumber(quantityInput?.value, 1),
+      };
+    });
+    return selection;
+  }
+
+  _prepSelectedRecipePayload(form) {
+    const selection = this._prepRecipeSelectionFromForm(form);
+    const recipeIds = Object.entries(selection).filter(([, row]) => row.selected).map(([recipeId]) => recipeId);
+    const recipeQuantities = Object.fromEntries(
+      Object.entries(selection)
+        .filter(([, row]) => row.selected)
+        .map(([recipeId, row]) => [recipeId, row.quantity]),
+    );
+    return { selection, recipeIds, recipeQuantities };
+  }
+
+  _prepShoppingPreview(recipeSuggestions = [], selection = {}) {
+    const selected = recipeSuggestions
+      .filter((recipe) => selection[recipe.id]?.selected)
+      .map((recipe) => ({ recipe, quantity: this._prepPositiveNumber(selection[recipe.id]?.quantity, 1) }));
+    if (!selected.length) {
+      return this._empty("Select recipes to preview missing shopping items.");
+    }
+    const rows = this._prepShoppingPreviewRows(selected);
+    if (!rows.length) {
+      return this._empty("Selected recipes have no missing ingredients in the current preview.");
+    }
+    return `<div class="stack">${rows.map((row) => this._summaryRow(row.label, [
+      row.amount || "Quantity not specified",
+      row.recipes.join(" + "),
+    ], { quantity: row.count > 1 ? `${row.count} recipes` : "Missing", klass: "warn" })).join("")}</div>`;
+  }
+
+  _prepShoppingPreviewRows(selectedRecipes = []) {
+    const rows = new Map();
+    for (const { recipe, quantity } of selectedRecipes) {
+      for (const item of recipe.missing || []) {
+        const key = String(item.label || item.original || "Ingredient").toLocaleLowerCase();
+        const current = rows.get(key) || { label: item.label || "Ingredient", quantity: 0, unit: "", rawAmounts: [], recipes: [], count: 0 };
+        const parsed = this._parsePrepAmount(item.amount);
+        if (parsed) {
+          current.quantity += parsed.quantity * quantity;
+          current.unit = current.unit || parsed.unit;
+        } else if (item.amount) {
+          current.rawAmounts.push(quantity > 1 ? `${quantity} x ${item.amount}` : item.amount);
+        }
+        current.recipes.push(`${recipe.label}${quantity > 1 ? ` x${quantity}` : ""}`);
+        current.count += 1;
+        rows.set(key, current);
+      }
+    }
+    return [...rows.values()].map((row) => ({
+      ...row,
+      amount: row.quantity ? `${this._formatPrepQuantity(row.quantity)} ${row.unit}`.trim() : row.rawAmounts.join(" + "),
+    })).sort((left, right) => left.label.localeCompare(right.label));
+  }
+
+  _parsePrepAmount(amount) {
+    const match = /^(\d+(?:\.\d+)?)\s*(.*)$/.exec(String(amount || "").trim());
+    return match ? { quantity: Number(match[1]), unit: match[2].trim() } : null;
+  }
+
+  _formatPrepQuantity(value) {
+    return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(2)));
+  }
+
+  _updatePrepShoppingPreview() {
+    const form = this.shadowRoot?.getElementById("meal-prep-calendar-form");
+    const preview = this.shadowRoot?.getElementById("prep-shopping-preview");
+    if (!form || !preview) {
+      return;
+    }
+    const { selection } = this._prepSelectedRecipePayload(form);
+    this._prepRecipeSelection = selection;
+    preview.innerHTML = this._prepShoppingPreview(this._data?.recipe_suggestions || [], selection);
   }
 
   _prepRecipeRankRow(recipe) {
@@ -1377,10 +1561,9 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const servings = this._prepPositiveNumber(session.servings || mealPrep.meal_count || completeMealPlan.meal_count, 1);
     const expectedPortions = this._prepPositiveNumber(session.expected_portions || this._prepExpectedFinishedPortions(mealPrep, completeMealPlan, servings), servings);
     const notes = session.description || session.notes || "No session notes.";
-    const scheduled = [session.start_date_time || session.start_time, session.end_date_time || session.end_time].filter(Boolean).join(" to ");
+    const scheduled = this._prepScheduleLabel(session);
     return `<div class="stack">
-      ${this._summaryRow("Session name", [session.summary || session.name || "Meal prep session"], { quantity: session.status === "past" ? "Past" : session.status === "now" ? "Now" : "Selected", klass: session.status === "past" ? "" : "ok" })}
-      ${this._summaryRow("Scheduled date/time", [scheduled || "No Home Assistant calendar time available", session.calendar_entity_id || session.entity_id || "Home Assistant calendar"], { quantity: "Calendar" })}
+      ${this._summaryRow("Scheduled date", [scheduled || "No Home Assistant calendar date available", session.calendar_entity_id || session.entity_id || "Home Assistant calendar"], { quantity: session.status === "past" ? "Past" : session.status === "now" ? "Today" : "All day", klass: session.status === "past" ? "" : "ok" })}
       ${this._summaryRow("Recipes or meals included", [recipes.length ? recipes.join(" · ") : "No recipes selected"], { quantity: recipes.length || 0 })}
       ${this._summaryRow("Number of servings", [`${this._safe(servings)} serving${servings === 1 ? "" : "s"}`], { quantity: servings })}
       ${this._summaryRow("Expected finished portions", [`${this._safe(expectedPortions)} finished portion${expectedPortions === 1 ? "" : "s"}`], { quantity: expectedPortions })}
@@ -1407,8 +1590,8 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     const activeRows = (mealPrep.calendar_events || []).map((event) => ({
       id: this._prepCalendarEventId(event),
       summary: event.name || event.message || "Active calendar session",
-      start_date_time: event.start_time || "",
-      end_date_time: event.end_time || "",
+      start_date_time: event.start_date || event.start_time || "",
+      end_date_time: event.end_date || event.end_time || "",
       calendar_entity_id: event.entity_id || "",
       status: event.state === "on" ? "now" : "calendar",
       description: event.message || "",
@@ -1418,11 +1601,37 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
   }
 
   _prepCalendarEventId(event = {}) {
-    return `calendar:${event.entity_id || ""}:${event.start_time || event.start_date_time || ""}:${event.name || event.message || ""}`;
+    return `calendar:${event.entity_id || ""}:${event.start_date || event.start_time || event.start_date_time || ""}:${event.name || event.message || ""}`;
+  }
+
+  _prepScheduleLabel(session = {}) {
+    const start = session.start_date_time || session.start_time || session.start_date || "";
+    const end = session.end_date_time || session.end_time || session.end_date || "";
+    if (!start) {
+      return "";
+    }
+    const startDay = String(start).slice(0, 10);
+    const endDay = String(end).slice(0, 10);
+    return !endDay || endDay === startDay || endDay === this._nextDate(startDay)
+      ? `${startDay} · all day`
+      : `${startDay} to ${endDay}`;
+  }
+
+  _nextDate(dateText) {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateText || ""));
+    if (!match) {
+      return "";
+    }
+    const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + 1));
+    return date.toISOString().slice(0, 10);
   }
 
   _prepSessionRecipeLabels(session = {}, completeMealPlan = {}) {
-    const recipes = (session.recipes || []).map((recipe) => recipe.label || recipe.name).filter(Boolean);
+    const recipes = (session.recipes || []).map((recipe) => {
+      const label = recipe.label || recipe.name;
+      const quantity = this._prepPositiveNumber(recipe.quantity, 1);
+      return label ? `${label}${quantity > 1 ? ` x${quantity}` : ""}` : "";
+    }).filter(Boolean);
     if (recipes.length) {
       return recipes;
     }
@@ -1708,7 +1917,7 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     if (activeTab === "attention") {
       const attentionTotal = operations.attention_total ?? ((summary.product_attention || 0) + (summary.empty || 0) + (summary.low || 0) + (storageAttention.attention_count || 0));
       return `<section class="ops-strip triple">
-        <div class="ops-card ${attentionTotal ? "warning" : "ok"}"><strong>Attention: ${this._safe(attentionTotal)}</strong><span>${this._safe(summary.product_attention || 0)} product · ${this._safe(summary.empty || 0)} empty · ${this._safe(summary.low || 0)} low</span></div>
+        <div class="ops-card ${attentionTotal ? "warning" : "ok"}"><strong>Open tasks: ${this._safe(attentionTotal)}</strong><span>${this._safe(summary.product_attention || 0)} product · ${this._safe(summary.empty || 0)} empty · ${this._safe(summary.low || 0)} low</span></div>
         <div class="ops-card ${badHealth ? "warning" : "ok"}"><strong>Storage safety: ${this._safe(badHealth)}</strong><span>${this._safe(storageAttention.unhealthy_locations_count ?? 0)} unhealthy locations</span></div>
         <div class="ops-card ${missing ? "warning" : "ok"}"><strong>Missing prep: ${this._safe(missing)}</strong><span>${this._safe(summary.stale ?? 0)} stale · ${this._safe(summary.unassigned ?? 0)} unassigned</span></div>
       </section>`;
@@ -2145,13 +2354,15 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
     if (this._isBusy()) return;
     const form = event.currentTarget;
     const value = (name) => form.elements[name]?.value?.trim() || "";
+    const startDate = value("start_date");
     const data = {
       entity_id: value("entity_id"),
-      summary: value("summary"),
-      start_date_time: value("start_date_time"),
-      end_date_time: value("end_date_time"),
+      summary: value("summary") || "Meal prep",
+      start_date: startDate,
+      end_date: this._nextDate(startDate),
     };
-    const recipeIds = [...form.querySelectorAll('input[name="recipe_ids"]:checked')].map((input) => input.value).filter(Boolean);
+    const { selection, recipeIds, recipeQuantities } = this._prepSelectedRecipePayload(form);
+    this._prepRecipeSelection = selection;
     if (value("description")) {
       data.description = value("description");
     }
@@ -2159,10 +2370,10 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       await this._hass.callService("calendar", "create_event", data);
       await this._hass.callService("mise_en_place_assistant", "create_prep_session", {
         calendar_entity_id: data.entity_id,
-        name: data.summary,
-        start_date_time: data.start_date_time,
-        end_date_time: data.end_date_time,
+        start_date_time: data.start_date,
+        end_date_time: data.start_date,
         recipe_ids: recipeIds,
+        recipe_quantities: recipeQuantities,
         description: data.description || "",
       });
       this._mealPrepSummaryDraft = "";
@@ -2191,6 +2402,21 @@ class MiseEnPlaceAssistantPanel extends HTMLElement {
       this._error = err?.message || "Could not copy overview JSON.";
       this._render();
     }
+  }
+
+  async _rollTvDinner() {
+    if (this._isBusy() || !this._hass) return;
+    await this._withBusy("rolling tv dinner", async () => {
+      this._tvDinnerPlan = await this._hass.callWS({
+        type: "mise_en_place_assistant/tv_dinner_plan",
+        meal_count: this._tvDinnerCount || 1,
+      });
+      this._notice = "TV dinner rolled.";
+      this._render();
+    }, (err) => {
+      this._error = err?.message || "Could not roll TV dinner.";
+      this._render();
+    });
   }
 
   async _saveProductMetadata(event) {

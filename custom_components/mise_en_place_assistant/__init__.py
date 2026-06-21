@@ -100,6 +100,7 @@ ATTR_CALENDAR_ENTITY_ID = "calendar_entity_id"
 ATTR_START_DATE_TIME = "start_date_time"
 ATTR_END_DATE_TIME = "end_date_time"
 ATTR_RECIPE_IDS = "recipe_ids"
+ATTR_RECIPE_QUANTITIES = "recipe_quantities"
 ATTR_AVAILABLE_IN_MEALIE = "available_in_mealie"
 ATTR_REQUEST_ID = "request_id"
 ATTR_SOURCE_PROVIDER = "source_provider"
@@ -449,10 +450,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         try:
             await _manager(hass).async_create_prep_session(
                 calendar_entity_id=call.data[ATTR_CALENDAR_ENTITY_ID],
-                summary=call.data[ATTR_NAME],
                 start_date_time=call.data[ATTR_START_DATE_TIME],
                 end_date_time=call.data[ATTR_END_DATE_TIME],
                 recipe_ids=call.data.get(ATTR_RECIPE_IDS, []),
+                recipe_quantities=call.data.get(ATTR_RECIPE_QUANTITIES, {}),
+                summary=call.data.get(ATTR_NAME, ""),
                 description=call.data.get(ATTR_DESCRIPTION, ""),
             )
         except ValueError as err:
@@ -685,10 +687,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         schema=vol.Schema(
             {
                 vol.Required(ATTR_CALENDAR_ENTITY_ID): cv.string,
-                vol.Required(ATTR_NAME): cv.string,
                 vol.Required(ATTR_START_DATE_TIME): cv.string,
                 vol.Required(ATTR_END_DATE_TIME): cv.string,
+                vol.Optional(ATTR_NAME, default=""): cv.string,
                 vol.Optional(ATTR_RECIPE_IDS, default=[]): vol.All(cv.ensure_list, [cv.string]),
+                vol.Optional(ATTR_RECIPE_QUANTITIES, default={}): {cv.string: _positive_number},
                 vol.Optional(ATTR_DESCRIPTION, default=""): cv.string,
             }
         ),

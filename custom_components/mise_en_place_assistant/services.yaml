@@ -452,10 +452,6 @@ create_prep_session:
       selector:
         entity:
           domain: calendar
-    name:
-      required: true
-      selector:
-        text:
     start_date_time:
       required: true
       selector:
@@ -467,6 +463,14 @@ create_prep_session:
     recipe_ids:
       selector:
         object:
+    recipe_quantities:
+      description: Mapping of recipe ID to selected recipe quantity for the prep day.
+      selector:
+        object:
+    name:
+      description: Optional calendar summary; defaults to Meal prep.
+      selector:
+        text:
     description:
       selector:
         text:
